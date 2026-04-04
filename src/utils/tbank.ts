@@ -9,7 +9,7 @@ const BASE_URL = 'https://securepay.tinkoff.ru/v2';
 // Token: sort all params (including Password) alphabetically,
 // concatenate values as strings, SHA-256 hash
 function generateToken(params: Record<string, any>): string {
-  const withPassword = { ...params, Password: PASSWORD };
+  const withPassword: Record<string, unknown> = { ...params, Password: PASSWORD };
   const sorted = Object.keys(withPassword)
     .sort()
     .reduce((acc, key) => {

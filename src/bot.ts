@@ -121,6 +121,13 @@ if (!token) {
 const admins = (process.env.admins || '').split(',').map(id => id.trim());
 const isAdmin = (userId: string) => admins.includes(userId);
 
+/** user_id в рантайме у Max есть; типы `ctx.user` в SDK неполные (strict TS даёт `never`). */
+function maxCtxUserId(ctx: { user?: unknown }): string {
+  const u = ctx.user as { user_id?: number | string | bigint } | undefined;
+  if (u == null || u.user_id == null) return '';
+  return String(u.user_id);
+}
+
 const bot = new Bot(token);
 
 // --- HELPERS ---
@@ -326,7 +333,7 @@ bot.on('message_created', async (ctx, next) => {
   // Always let commands pass through to their dedicated handlers
   if (ctx.message.body.text?.startsWith('/')) return next();
   
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   
   // If user doesn't exist yet, we must allow /start to proceed
@@ -1212,7 +1219,7 @@ const runInfiniTalkGeneration = async (ctx: any, userId: string, prompt: string)
 
 bot.action('skip_model_prompt', async (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user) return;
 
@@ -1226,7 +1233,7 @@ bot.action('skip_model_prompt', async (ctx) => {
 // Start command / Welcome message
 bot.command('start', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   let user = db_helper.getUser(userId);
 
   if (!user) {
@@ -1256,7 +1263,7 @@ bot.command('start', (ctx) => {
 /** Тест длительности видео: затем одним сообщением отправьте видео в этот же чат */
 bot.command('probe_video', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   if (!db_helper.getUser(userId)) {
     return ctx.reply('Сначала отправьте /start');
   }
@@ -1273,7 +1280,7 @@ bot.command('probe_video', (ctx) => {
 // bot_started event (usually when a user opens the bot)
 bot.on('bot_started', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   let user = db_helper.getUser(userId);
 
   if (!user) {
@@ -1289,7 +1296,7 @@ bot.on('bot_started', (ctx) => {
 // --- PHOTO HANDLERS ---
 bot.action('create_photo', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   
   // Set initial photo state and reset video section state
   db_helper.updateVideoSetting(userId, 'photo_state', 'awaiting_refs');
@@ -1312,7 +1319,7 @@ bot.action('create_photo', (ctx) => {
 
 bot.action('photo_skip_refs', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
 
   db_helper.updateVideoSetting(userId, 'photo_state', 'awaiting_photo_model');
   primePhotoConfigureStep(userId);
@@ -1327,7 +1334,7 @@ bot.action('photo_skip_refs', (ctx) => {
 
 bot.action('photo_continue_to_prompt', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
 
   db_helper.updateVideoSetting(userId, 'photo_state', 'awaiting_photo_model');
   primePhotoConfigureStep(userId);
@@ -1342,7 +1349,7 @@ bot.action('photo_continue_to_prompt', (ctx) => {
 
 bot.action(/^photo_pick_(s5|s45|nbp|nb2)$/, (ctx) => {
   if (!ctx.user || !ctx.match) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const suf = ctx.match[1];
   const modelId = PHOTO_CALLBACK_TO_MODEL[suf];
   if (!modelId) return;
@@ -1365,7 +1372,7 @@ bot.action(/^photo_pick_(s5|s45|nbp|nb2)$/, (ctx) => {
 
 bot.action('photo_back_to_refs', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   clearPhotoKieSelection(userId);
   db_helper.updateVideoSetting(userId, 'photo_state', 'awaiting_refs');
   persistPhotoMenuMessageId(ctx, userId);
@@ -1379,7 +1386,7 @@ bot.action('photo_back_to_refs', (ctx) => {
 for (const payload of PHOTO_AR_CALLBACK_PAYLOADS) {
   bot.action(payload, async (ctx) => {
     if (!ctx.user) return;
-    const userId = ctx.user.user_id.toString();
+    const userId = maxCtxUserId(ctx);
     const u = db_helper.getUser(userId);
     if (!u || u.photo_state !== 'awaiting_photo_model') return;
     const ar = photoCallbackToAspectRatio(payload);
@@ -1391,7 +1398,7 @@ for (const payload of PHOTO_AR_CALLBACK_PAYLOADS) {
 
 bot.action('photo_qual_2k', async (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const u = db_helper.getUser(userId);
   if (!u || u.photo_state !== 'awaiting_photo_model') return;
   patchPhotoGenPrefs(userId, { output_quality: '2k' });
@@ -1400,7 +1407,7 @@ bot.action('photo_qual_2k', async (ctx) => {
 
 bot.action('photo_qual_4k', async (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const u = db_helper.getUser(userId);
   if (!u || u.photo_state !== 'awaiting_photo_model') return;
   patchPhotoGenPrefs(userId, { output_quality: '4k' });
@@ -1410,7 +1417,7 @@ bot.action('photo_qual_4k', async (ctx) => {
 // --- MOTION CONTROL HANDLERS ---
 bot.action('motion_control', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user) return;
 
@@ -1432,7 +1439,7 @@ bot.action('motion_control', (ctx) => {
 
 bot.action('set_motion_std', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'motion_quality', 'std');
   db_helper.updateVideoSetting(userId, 'motion_state', 'awaiting_photo');
   const user = db_helper.getUser(userId)!;
@@ -1445,7 +1452,7 @@ bot.action('set_motion_std', (ctx) => {
 
 bot.action('set_motion_pro', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'motion_quality', 'pro');
   db_helper.updateVideoSetting(userId, 'motion_state', 'awaiting_photo');
   const user = db_helper.getUser(userId)!;
@@ -1458,7 +1465,7 @@ bot.action('set_motion_pro', (ctx) => {
 
 bot.action('set_avatar', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'motion_state', 'awaiting_avatar_photo');
   db_helper.updateVideoSetting(userId, 'stored_image_url', null);
   db_helper.updateVideoSetting(userId, 'stored_video_url', null);
@@ -1476,7 +1483,7 @@ bot.action('set_avatar', (ctx) => {
 
 bot.action('set_infinitalk', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'motion_state', 'awaiting_infinitalk_photo');
   db_helper.updateVideoSetting(userId, 'stored_image_url', null);
   db_helper.updateVideoSetting(userId, 'stored_video_url', null);
@@ -1494,7 +1501,7 @@ bot.action('set_infinitalk', (ctx) => {
 
 bot.action('motion_control_reset', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'motion_state', 'idle');
   db_helper.updateVideoSetting(userId, 'stored_image_url', null);
   const user = db_helper.getUser(userId)!;
@@ -1508,7 +1515,7 @@ bot.action('motion_control_reset', (ctx) => {
 // --- ADMIN HANDLERS ---
 bot.command('admin', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   
   if (!isAdmin(userId)) {
     return ctx.reply('❌ У вас нет прав доступа к этой команде.');
@@ -1521,7 +1528,7 @@ bot.command('admin', (ctx) => {
 
 bot.command(/^logs(\s+\w+)?$/, async (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
 
   if (!isAdmin(userId)) {
     return ctx.reply('❌ У вас нет прав доступа к этой команде.');
@@ -1600,7 +1607,7 @@ bot.command('unban', async (ctx) => {
 });
 
 bot.action('admin_refresh_stats', (ctx) => {
-  if (!ctx.user || !isAdmin(ctx.user.user_id.toString())) return;
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
   
   return ctx.editMessage({
     text: getAdminPanelText(),
@@ -1609,7 +1616,7 @@ bot.action('admin_refresh_stats', (ctx) => {
 });
 
 bot.action('admin_users_excel', async (ctx) => {
-  if (!ctx.user || !isAdmin(ctx.user.user_id.toString())) return;
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
 
   try {
     await ctx.reply('⏳ Формирую таблицу пользователей...');
@@ -1699,7 +1706,7 @@ bot.action('admin_users_excel', async (ctx) => {
 });
 
 bot.action('admin_prompts_excel', async (ctx) => {
-  if (!ctx.user || !isAdmin(ctx.user.user_id.toString())) return;
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
 
   try {
     await ctx.reply('⏳ Формирую выгрузку промптов и модерации...');
@@ -1827,18 +1834,18 @@ bot.action('admin_prompts_excel', async (ctx) => {
 });
 
 bot.action('admin_add_bananas_start', (ctx) => {
-  if (!ctx.user || !isAdmin(ctx.user.user_id.toString())) return;
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
   
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'is_admin_adding_bananas', 1);
   
   return ctx.reply('🍌 Введите ID пользователя и количество бананов через пробел.\nПример: 123456789 50');
 });
 
 bot.action('admin_broadcast_start', (ctx) => {
-  if (!ctx.user || !isAdmin(ctx.user.user_id.toString())) return;
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
 
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'is_admin_broadcasting', 1);
 
   return ctx.reply(
@@ -1854,7 +1861,7 @@ bot.action('admin_broadcast_start', (ctx) => {
 // --- VIDEO HANDLERS ---
 bot.action('create_video', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user) return;
 
@@ -1879,9 +1886,10 @@ bot.action('create_video', (ctx) => {
 
 // Dynamic settings handlers
 bot.action(/^set_mode_(.+)$/, (ctx) => {
-  if (!ctx.user || !ctx.callback) return;
-  const mode = ctx.callback.payload.replace('set_mode_', '');
-  const userId = ctx.user.user_id.toString();
+  const p = ctx.callback?.payload;
+  if (!ctx.user || !p) return;
+  const mode = p.replace('set_mode_', '');
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'video_mode', mode);
   
   const user = db_helper.getUser(userId);
@@ -1894,9 +1902,10 @@ bot.action(/^set_mode_(.+)$/, (ctx) => {
 });
 
 bot.action(/^set_model_(.+)$/, (ctx) => {
-  if (!ctx.user || !ctx.callback) return;
-  const model = ctx.callback.payload.replace('set_model_', '');
-  const userId = ctx.user.user_id.toString();
+  const p = ctx.callback?.payload;
+  if (!ctx.user || !p) return;
+  const model = p.replace('set_model_', '');
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'video_model', model);
 
   // Grok always works in image-to-video mode, reset duration to valid default
@@ -1937,9 +1946,10 @@ bot.action(/^set_model_(.+)$/, (ctx) => {
 });
 
 bot.action(/^set_grok_mode_(.+)$/, (ctx) => {
-  if (!ctx.user || !ctx.callback) return;
-  const mode = ctx.callback.payload.replace('set_grok_mode_', '');
-  const userId = ctx.user.user_id.toString();
+  const p = ctx.callback?.payload;
+  if (!ctx.user || !p) return;
+  const mode = p.replace('set_grok_mode_', '');
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'grok_mode', mode);
 
   const user = db_helper.getUser(userId);
@@ -1952,9 +1962,10 @@ bot.action(/^set_grok_mode_(.+)$/, (ctx) => {
 });
 
 bot.action(/^set_ratio_(.+)$/, (ctx) => {
-  if (!ctx.user || !ctx.callback) return;
-  const ratio = ctx.callback.payload.replace('set_ratio_', '');
-  const userId = ctx.user.user_id.toString();
+  const p = ctx.callback?.payload;
+  if (!ctx.user || !p) return;
+  const ratio = p.replace('set_ratio_', '');
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'video_ratio', ratio);
   
   const user = db_helper.getUser(userId);
@@ -1967,9 +1978,10 @@ bot.action(/^set_ratio_(.+)$/, (ctx) => {
 });
 
 bot.action(/^set_duration_(.+)$/, (ctx) => {
-  if (!ctx.user || !ctx.callback) return;
-  const duration = ctx.callback.payload.replace('set_duration_', '');
-  const userId = ctx.user.user_id.toString();
+  const p = ctx.callback?.payload;
+  if (!ctx.user || !p) return;
+  const duration = p.replace('set_duration_', '');
+  const userId = maxCtxUserId(ctx);
   db_helper.updateVideoSetting(userId, 'video_duration', duration);
   
   const user = db_helper.getUser(userId);
@@ -1988,9 +2000,10 @@ const patchSeed2Prefs = (userId: string, patch: Partial<import('./handlers/video
 };
 
 bot.action(/^set_seed2_audio_(0|1)$/, (ctx) => {
-  if (!ctx.user || !ctx.callback?.payload) return;
-  const on = ctx.callback.payload.endsWith('1');
-  const userId = ctx.user.user_id.toString();
+  const p = ctx.callback?.payload;
+  if (!ctx.user || !p) return;
+  const on = p.endsWith('1');
+  const userId = maxCtxUserId(ctx);
   patchSeed2Prefs(userId, { seedance2_generate_audio: on });
   const user = db_helper.getUser(userId);
   if (!user) return;
@@ -2016,7 +2029,7 @@ const resetMainMenuUserState = (userId: string) => {
 
 bot.action('main_menu', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user) return;
 
@@ -2033,7 +2046,7 @@ bot.action('main_menu', (ctx) => {
 /** Главное меню новым сообщением — не затирает карточку/результат (фото, видео и т.п.) */
 bot.action('main_menu_reply', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user) return;
 
@@ -2049,7 +2062,7 @@ bot.action('main_menu_reply', (ctx) => {
 // video_menu alias for create_video (used in some inline keyboards)
 bot.action('video_menu', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user) return;
 
@@ -2073,7 +2086,7 @@ bot.action('video_menu', (ctx) => {
 // photo_menu alias for create_photo (used in some inline keyboards)
 bot.action('photo_menu', (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   let user = db_helper.getUser(userId);
   if (!user) return;
 
@@ -2104,9 +2117,10 @@ bot.action('top_up', (ctx) => {
   });
 });
 bot.action(/^buy_pack_(\d+)$/, async (ctx) => {
-  if (!ctx.callback || !ctx.user) return;
-  const userId = ctx.user.user_id.toString();
-  const bananas = parseInt(ctx.callback.payload.replace('buy_pack_', ''));
+  const p = ctx.callback?.payload;
+  if (!ctx.user || !p) return;
+  const userId = maxCtxUserId(ctx);
+  const bananas = parseInt(p.replace('buy_pack_', ''), 10);
   const pack = PACKS.find(p => p.bananas === bananas);
   if (!pack) return ctx.reply('❌ Пакет не найден.');
 
@@ -2141,7 +2155,7 @@ bot.action(/^buy_pack_(\d+)$/, async (ctx) => {
 
 bot.action('check_payment', async (ctx) => {
   if (!ctx.user) return;
-  const userId = ctx.user.user_id.toString();
+  const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user?.pending_payment_id) {
     return ctx.reply('❌ Активный платёж не найден.');
