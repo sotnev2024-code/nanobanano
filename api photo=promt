@@ -1,0 +1,231 @@
+Gemini 2.5 Pro API Documentation
+Chat completion using Google's Gemini 2.5 Pro model via OpenAI-compatible API
+
+Overview
+This document describes how to use the Gemini 2.5 Pro model for chat completion with multimodal capabilities (text, images, video, audio, PDF) and advanced features like function calling, Google Search grounding, structured output, and reasoning.
+
+Authentication
+All API requests require a Bearer Token in the request header:
+
+text
+Authorization: Bearer YOUR_API_KEY
+Get API Key:
+
+Visit API Key Management Page to get your API Key
+
+Add to request header: Authorization: Bearer YOUR_API_KEY
+
+API Information
+URL: POST https://api.kie.ai/gemini-2.5-pro/v1/chat/completions
+
+Content-Type: application/json
+
+Request Parameters
+Required Parameters
+Parameter	Type	Description
+messages	array	Array of message objects (see below)
+Optional Parameters
+Parameter	Type	Description
+stream	boolean	If true, returns responses as server-sent events (SSE) with incremental deltas
+tools	array	Defines functions the model can call (e.g., googleSearch)
+response_format	object	JSON Schema object defining the response structure (mutually exclusive with tools)
+include_thoughts	boolean	Whether to include reasoning tokens in the response
+reasoning_effort	string	Effort level for reasoning: "low", "medium", "high"
+Messages Structure
+The messages array contains conversation history. Each message has:
+
+Field	Type	Description
+role	string	"user", "assistant", or "system"
+content	array	Array of content parts (text and/or media)
+Content Part Types
+Text Part
+json
+{
+  "type": "text",
+  "text": "Your text prompt here"
+}
+Media Part (Unified Structure)
+For images, video, audio, and PDF files, use the same structure:
+
+json
+{
+  "type": "image_url",
+  "image_url": {
+    "url": "https://your-file-url.com/file.mp4"
+  }
+}
+Important:
+
+The type field is fixed as "image_url" for all file types
+
+The image_url key name remains unchanged
+
+Only the url value changes to point to your specific media file
+
+Tools Parameter
+The tools parameter allows the model to call external functions.
+
+Google Search Tool
+Enable grounding with Google Search (mutually exclusive with response_format):
+
+json
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "googleSearch"
+      }
+    }
+  ]
+}
+Restriction: Google Search and function calling cannot be used together with response_format.
+
+Response Format Parameter
+The response_format parameter defines the structure of the response. When provided, the model generates responses conforming to the JSON Schema.
+
+json
+{
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "structured_output",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
+Important: response_format and tools are mutually exclusive.
+
+Streaming Support
+When stream: true is set, the API returns responses as server-sent events (SSE) with Content-Type: text/event-stream. Each event contains partial message content, enabling real-time display of responses.
+
+Request Example
+bash
+curl --location --request POST 'https://api.kie.ai/gemini-2.5-pro/v1/chat/completions' \
+--header 'Authorization: Bearer YOUR_API_KEY' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "What is in this image?"
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "https://example.com/image.png"
+          }
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "googleSearch"
+      }
+    }
+  ],
+  "stream": true,
+  "include_thoughts": true,
+  "reasoning_effort": "high",
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "structured_output",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}'
+Response Example
+Non-streaming Response
+json
+{
+  "id": "chatcmpl-example-123",
+  "object": "chat.completion",
+  "created": 1677652288,
+  "model": "gemini-2.5-pro",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The image shows a scenic mountain landscape with pine trees and a lake."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 50,
+    "total_tokens": 60
+  }
+}
+Streaming Response
+When stream: true, responses are sent as SSE events with data: lines containing JSON fragments.
+
+Response Parameters
+Parameter	Type	Description
+id	string	Unique identifier for the completion
+object	string	Always "chat.completion"
+created	integer	Unix timestamp of creation
+model	string	Model name ("gemini-2.5-pro")
+choices	array	Array of completion choices
+choices[].index	integer	Index of the choice
+choices[].message	object	Message object (non-streaming)
+choices[].message.role	string	"assistant"
+choices[].message.content	string	Generated content
+choices[].finish_reason	string	"stop", "length", "tool_calls", etc.
+usage	object	Token usage statistics
+usage.prompt_tokens	integer	Tokens in the prompt
+usage.completion_tokens	integer	Tokens in the completion
+usage.total_tokens	integer	Total tokens used
+Error Codes
+Status Code	Description
+200	Request successful
+400	Invalid request parameters
+401	Authentication failed, please check API Key
+429	Request rate limit exceeded
+500	Internal server error
+Feature Summary
+Feature	Support
+Multimodal (text + images)	✅
+Video input	✅ (via unified structure)
+Audio input	✅ (via unified structure)
+PDF input	✅ (via unified structure)
+Streaming	✅
+Function Calling	✅
+Google Search Grounding	✅
+Structured Output (JSON Schema)	✅
+Reasoning tokens	✅ (include_thoughts, reasoning_effort)
+Usage Flow
+Prepare messages: Create an array of messages with text and/or media parts
+
+Optional features: Add tools, response_format, stream, or reasoning parameters as needed
+
+Send request: POST to the endpoint with your API key
+
+Handle response: Parse the JSON response or process SSE events if streaming
+
+Check usage: Monitor token usage for cost management
+
