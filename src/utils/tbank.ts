@@ -5,6 +5,8 @@ import { logger } from './logger';
 const TERMINAL_KEY = process.env.TBANK_TERMINAL_KEY || '1774620399694DEMO';
 const PASSWORD = process.env.TBANK_PASSWORD || '';
 const BASE_URL = 'https://securepay.tinkoff.ru/v2';
+/** Полный HTTPS-URL для POST-уведомлений (например https://bananoboom.ru/api/tbank/notify) */
+const NOTIFICATION_URL = (process.env.TBANK_NOTIFICATION_URL || '').trim();
 
 // Token: sort all params (including Password) alphabetically,
 // concatenate values as strings, SHA-256 hash
@@ -18,6 +20,26 @@ function generateToken(params: Record<string, any>): string {
     }, {} as Record<string, string>);
   const str = Object.values(sorted).join('');
   return crypto.createHash('sha256').update(str).digest('hex');
+}
+
+const NOTIFY_TOKEN_SKIP = new Set(['Token', 'Data', 'Receipt']);
+
+/** Проверка подписи тела уведомления (см. «Проверить токен уведомлений» в доке Т-Банка). */
+export function verifyTbankNotificationToken(body: Record<string, unknown>): boolean {
+  const received = body.Token;
+  if (received === undefined || received === null || !PASSWORD) return false;
+  const forSign: Record<string, string> = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (NOTIFY_TOKEN_SKIP.has(k)) continue;
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'object') continue;
+    forSign[k] = String(v);
+  }
+  forSign.Password = PASSWORD;
+  const sortedKeys = Object.keys(forSign).sort();
+  const str = sortedKeys.map((key) => forSign[key]).join('');
+  const hash = crypto.createHash('sha256').update(str, 'utf8').digest('hex');
+  return hash.toLowerCase() === String(received).toLowerCase();
 }
 
 export const PACKS: { bananas: number; rubles: number; label: string }[] = [
@@ -42,6 +64,9 @@ export const tbank = {
       OrderId: orderId,
       Description: `Пополнение баланса: ${bananas} 🍌`,
     };
+    if (NOTIFICATION_URL) {
+      params.NotificationURL = NOTIFICATION_URL;
+    }
     const token = generateToken(params);
 
     const response = await axios.post(`${BASE_URL}/Init`, { ...params, Token: token });

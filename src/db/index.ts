@@ -227,6 +227,25 @@ export const db_helper = {
       .run(userId);
   },
 
+  /**
+   * Атомарно начисляет бананы по pending_payment_id (один раз даже при гонке с polling).
+   * Возвращает null, если такого платежа уже нет.
+   */
+  tryCompletePaymentByPaymentId: (paymentId: string): { userId: string; bananas: number } | null => {
+    const row = db
+      .prepare(
+        `UPDATE users
+         SET balance = balance + pending_bananas,
+             pending_payment_id = NULL,
+             pending_bananas = 0
+         WHERE pending_payment_id = ? AND pending_bananas > 0
+         RETURNING id, pending_bananas`
+      )
+      .get(paymentId) as { id: string; pending_bananas: number } | undefined;
+    if (!row) return null;
+    return { userId: row.id, bananas: row.pending_bananas };
+  },
+
   getAllUserIds: (): string[] => {
     const rows = db.prepare('SELECT id FROM users').all() as { id: string }[];
     return rows.map(r => r.id);

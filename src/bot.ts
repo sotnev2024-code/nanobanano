@@ -2163,10 +2163,15 @@ bot.action('check_payment', async (ctx) => {
   try {
     const status = await tbank.getPaymentStatus(user.pending_payment_id);
     if (status === 'CONFIRMED') {
-      db_helper.updateBalance(userId, user.pending_bananas);
-      db_helper.clearPayment(userId);
+      const done = db_helper.tryCompletePaymentByPaymentId(user.pending_payment_id);
       const updated = db_helper.getUser(userId)!;
-      return ctx.reply(`✅ Оплата подтверждена! Начислено ${user.pending_bananas} 🍌\n🍌 Баланс: ${updated.balance} 🍌`);
+      if (done) {
+        return ctx.reply(`✅ Оплата подтверждена! Начислено ${done.bananas} 🍌\n🍌 Баланс: ${updated.balance} 🍌`);
+      }
+      if (!updated.pending_payment_id) {
+        return ctx.reply(`✅ Оплата уже учтена.\n🍌 Баланс: ${updated.balance} 🍌`);
+      }
+      return ctx.reply(`✅ Оплата подтверждена.\n🍌 Баланс: ${updated.balance} 🍌`);
     }
     return ctx.reply(`⏳ Статус платежа: ${status}\n\nОплата ещё не подтверждена. Попробуйте через минуту.`);
   } catch (error) {
@@ -2183,18 +2188,30 @@ const pollPaymentStatus = async (ctx: any, userId: string, paymentId: string, ba
     try {
       const status = await tbank.getPaymentStatus(paymentId);
       if (status === 'CONFIRMED') {
-        db_helper.updateBalance(userId, bananas);
-        db_helper.clearPayment(userId);
+        const done = db_helper.tryCompletePaymentByPaymentId(paymentId);
         const updated = db_helper.getUser(userId)!;
-        await ctx.reply(
-          `✅ Оплата прошла успешно!\n\nНачислено: ${bananas} 🍌\n🍌 Баланс: ${updated.balance} 🍌`,
-          {
-            attachments: [
-              Keyboard.inlineKeyboard([[Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]])
-            ]
-          }
-        );
-        return;
+        if (done) {
+          await ctx.reply(
+            `✅ Оплата прошла успешно!\n\nНачислено: ${done.bananas} 🍌\n🍌 Баланс: ${updated.balance} 🍌`,
+            {
+              attachments: [
+                Keyboard.inlineKeyboard([[Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]])
+              ]
+            }
+          );
+          return;
+        }
+        if (!updated.pending_payment_id) {
+          await ctx.reply(
+            `✅ Оплата уже учтена.\n🍌 Баланс: ${updated.balance} 🍌`,
+            {
+              attachments: [
+                Keyboard.inlineKeyboard([[Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]])
+              ]
+            }
+          );
+          return;
+        }
       }
       if (status === 'CANCELED' || status === 'REJECTED' || status === 'DEADLINE_EXPIRED') {
         db_helper.clearPayment(userId);
