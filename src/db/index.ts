@@ -346,17 +346,21 @@ export const db_helper = {
   },
 
   getStats: () => {
-    const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get() as any;
-    const totalGenerations = db.prepare('SELECT COUNT(*) as count FROM generations').get() as any;
-    const totalPhotoGenerations = db.prepare('SELECT COUNT(*) as count FROM photo_generations').get() as any;
-    const successGenerations = db.prepare("SELECT COUNT(*) as count FROM generations WHERE status = 'success'").get() as any;
-    const failGenerations = db.prepare("SELECT COUNT(*) as count FROM generations WHERE status = 'fail'").get() as any;
-    
+    const totalUsers = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any).count;
+
+    const vidTotal = (db.prepare('SELECT COUNT(*) as count FROM generations').get() as any).count;
+    const vidSuccess = (db.prepare("SELECT COUNT(*) as count FROM generations WHERE status = 'success'").get() as any).count;
+    const vidFail = (db.prepare("SELECT COUNT(*) as count FROM generations WHERE status = 'fail'").get() as any).count;
+
+    const photoTotal = (db.prepare('SELECT COUNT(*) as count FROM photo_generations').get() as any).count;
+    const photoSuccess = (db.prepare("SELECT COUNT(*) as count FROM photo_generations WHERE status = 'success'").get() as any).count;
+    const photoFail = (db.prepare("SELECT COUNT(*) as count FROM photo_generations WHERE status = 'fail'").get() as any).count;
+
     return {
-      totalUsers: totalUsers.count,
-      totalGenerations: totalGenerations.count + totalPhotoGenerations.count,
-      successGenerations: successGenerations.count,
-      failGenerations: failGenerations.count
+      totalUsers,
+      totalGenerations: vidTotal + photoTotal,
+      successGenerations: vidSuccess + photoSuccess,
+      failGenerations: vidFail + photoFail
     };
   },
 
