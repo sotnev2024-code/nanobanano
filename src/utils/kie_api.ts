@@ -198,7 +198,7 @@ export const kie_api = {
               content: [
                 {
                   type: 'text',
-                  text: 'Analyze this photo and write a detailed English prompt for generating a similar image with an AI image generator. Describe: subjects and their appearance, clothing, poses and expressions, lighting (direction, color, quality), background and environment, camera angle, depth of field, art style, color palette, mood and atmosphere. Return ONLY the prompt text, no explanations or extra commentary.'
+                  text: 'Проанализируй это фото и напиши подробный промпт на РУССКОМ языке для генерации похожего изображения в ИИ-генераторе. Опиши: объекты и их внешность, одежду, позы и выражения лиц, освещение (направление, цвет, качество), фон и окружение, ракурс камеры, глубину резкости, стиль, цветовую палитру, настроение и атмосферу. Верни ТОЛЬКО текст промпта, без объяснений и лишних комментариев.'
                 },
                 {
                   type: 'image_url',

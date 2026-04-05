@@ -199,7 +199,7 @@ export const getPhotoMenuText = (user: User) => {
     const qLabel = getPhotoOutputQuality(p) === '4k' ? '4K' : '2K';
     const noteS5 =
       mid === 'seedream_5_lite' && refCount > 0
-        ? '\n\n⚠️ Seedream 5.0: только текст, референсы не отправляются'
+        ? '\n\n📎 Seedream 5.0: референсы будут использованы (Image-to-Image)'
         : '';
     const noteS45 = mid === 'seedream_45_edit' ? '\n\n📎 Seedream 4.5: нужна минимум 1 фотография.' : '';
 
@@ -310,6 +310,19 @@ export async function buildPhotoCreateTaskParams(
   const nanoRes = getPhotoOutputQuality(prefs) === '4k' ? '4K' : '2K';
 
   if (mid === 'seedream_5_lite') {
+    if (rawRefUrls.length > 0) {
+      const kieUrls = await uploadPhotoRefsForKie(rawRefUrls, 14);
+      return {
+        model: 'seedream/5-lite-image-to-image',
+        input: {
+          prompt,
+          image_urls: kieUrls,
+          aspect_ratio: aspect,
+          quality: seedreamQuality,
+          nsfw_checker: true
+        }
+      };
+    }
     return {
       model: meta.kieModel,
       input: {

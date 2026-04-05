@@ -537,6 +537,17 @@ bot.on('message_created', async (ctx, next) => {
             logger.warn('photo', 'Не удалось обновить карточку меню (референсы)', e);
           }
         }
+        await ctx.reply(
+          `✅ Фото принято! (${refs.length}/14)\n\nЗагрузите ещё или нажмите «Продолжить».`,
+          {
+            attachments: [
+              Keyboard.inlineKeyboard([
+                [Keyboard.button.callback('✅ Продолжить', 'photo_continue_to_prompt')],
+                [Keyboard.button.callback('⏭️ Пропустить референсы', 'photo_skip_refs')]
+              ])
+            ]
+          }
+        );
         return;
       }
     }
