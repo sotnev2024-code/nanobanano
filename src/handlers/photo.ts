@@ -100,7 +100,7 @@ export const PHOTO_MODEL_META: Record<
 };
 
 export function defaultPhotoGenPrefs(): PhotoGenPrefs {
-  return { aspect_ratio: '1:1', output_quality: '2k' };
+  return { aspect_ratio: '1:1', output_quality: '4k' };
 }
 
 export function parsePhotoGenPrefs(user: User): PhotoGenPrefs {

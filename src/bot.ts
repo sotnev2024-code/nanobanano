@@ -205,13 +205,19 @@ const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cos
             await ctx.reply(`✅ Фото готово!\n\nСписано: ${cost} 🍌`, {
               attachments: [
                 uploaded.toJson(),
-                Keyboard.inlineKeyboard([[Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]])
+                Keyboard.inlineKeyboard([
+                  [Keyboard.button.link('🔗 Скачать оригинал (без сжатия)', imageUrl)],
+                  [Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]
+                ])
               ]
             });
           } catch {
-            await ctx.reply(`✅ Фото готово!\n\n🔗 ${imageUrl}\n\nСписано: ${cost} 🍌`, {
+            await ctx.reply(`✅ Фото готово!\n\nСписано: ${cost} 🍌`, {
               attachments: [
-                Keyboard.inlineKeyboard([[Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]])
+                Keyboard.inlineKeyboard([
+                  [Keyboard.button.link('🔗 Скачать оригинал (без сжатия)', imageUrl)],
+                  [Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]
+                ])
               ]
             });
           }
@@ -479,18 +485,20 @@ bot.on('message_created', async (ctx, next) => {
       }
 
       try {
-        await ctx.reply('⏳ Анализирую фото... Это может занять несколько секунд.');
+        await ctx.reply('⏳ Анализирую фото... Подождите несколько секунд.');
 
-        const prompt = await kie_api.analyzeImage(imageUrl);
+        const rawPrompt = await kie_api.analyzeImage(imageUrl);
+        const fullPrompt =
+          'НЕ МЕНЯЯ ВНЕШНОСТИ человека с фото ДАЖЕ НА 1%. ' +
+          rawPrompt +
+          ' Фотореалистичное изображение, высокая текстурная детализация, высокое качество, разрешение 8K.';
 
         db_helper.updateVideoSetting(userId, 'photo_prompt_state', 'idle');
         db_helper.updateVideoSetting(userId, 'photo_prompt_upload_count', 0);
         db_helper.updateVideoSetting(userId, 'photo_prompt_menu_message_id', null);
 
         await ctx.reply(
-          `✅ Готово! Вот промпт для генерации похожего фото:\n\n` +
-            `\`\`\`\n${prompt}\n\`\`\`\n\n` +
-            `💡 Скопируйте промпт и используйте его в разделе "Создать фото" или "Создать видео".`,
+          `✅ Готово! Ваш промпт для генерации:\n\n💡 Скопируйте текст ниже и используйте в «Создать фото» или «Создать видео».`,
           {
             attachments: [
               Keyboard.inlineKeyboard([
@@ -501,6 +509,8 @@ bot.on('message_created', async (ctx, next) => {
             ]
           }
         );
+
+        await ctx.reply(fullPrompt);
       } catch (error) {
         logger.error('photo_prompt', 'Photo analysis error', error);
         db_helper.updateVideoSetting(userId, 'photo_prompt_upload_count', 0);
