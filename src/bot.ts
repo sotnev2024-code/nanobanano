@@ -1098,6 +1098,8 @@ bot.on('message_created', async (ctx, next) => {
         input: input
       });
 
+      logger.info('video_gen', 'createTask response', { code: task.code, msg: task.msg, taskId: task.data?.taskId });
+
       if (task.code === 200) {
         const taskId = task.data.taskId;
         db_helper.updateVideoSetting(userId, 'last_task_id', taskId);

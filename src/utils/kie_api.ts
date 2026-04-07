@@ -163,13 +163,10 @@ export const kie_api = {
       model: params.model,
       input: params.input
     };
-    // kling-3.0/motion-control OpenAPI marks callBackUrl as required
-    if (params.callBackUrl || String(params.model).includes('motion-control')) {
-      body.callBackUrl =
-        params.callBackUrl ||
-        process.env.KIE_CALLBACK_URL ||
-        'https://example.com/kie-callback';
-    }
+    body.callBackUrl =
+      params.callBackUrl ||
+      process.env.KIE_CALLBACK_URL ||
+      'https://example.com/kie-callback';
     const response = await api.post('/createTask', body);
     return response.data;
   },

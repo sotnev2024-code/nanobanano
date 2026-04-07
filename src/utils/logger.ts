@@ -2,11 +2,11 @@ import { db_helper } from '../db';
 
 function formatDetails(data: unknown): string | undefined {
   if (data === undefined || data === null) return undefined;
-  if (typeof data === 'string') return data.slice(0, 1000);
+  if (typeof data === 'string') return data.slice(0, 4000);
   try {
-    return JSON.stringify(data, null, 2).slice(0, 1000);
+    return JSON.stringify(data, null, 2).slice(0, 4000);
   } catch {
-    return String(data).slice(0, 1000);
+    return String(data).slice(0, 4000);
   }
 }
 
