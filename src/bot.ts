@@ -1565,7 +1565,7 @@ bot.command('admin', (ctx) => {
   });
 });
 
-bot.command(/^logs(\s+\w+)?$/, async (ctx) => {
+bot.command(/^logs(\s+.*)?$/, async (ctx) => {
   if (!ctx.user) return;
   const userId = maxCtxUserId(ctx);
 
@@ -1573,16 +1573,17 @@ bot.command(/^logs(\s+\w+)?$/, async (ctx) => {
     return ctx.reply('❌ У вас нет прав доступа к этой команде.');
   }
 
-  // ctx.match[1] contains the subcommand if present (e.g. " error", " clear")
-  const subCmd = ctx.match?.[1]?.trim().toLowerCase() || '';
+  const args = (ctx.match?.[1] || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
 
-  if (subCmd === 'clear') {
+  if (args.includes('clear')) {
     db_helper.clearLogs();
     return ctx.reply('🗑 Логи очищены.');
   }
 
-  const level = ['error', 'warn', 'info'].includes(subCmd) ? subCmd : undefined;
-  const entries = db_helper.getLogs(25, level);
+  const level = args.find(a => ['error', 'warn', 'info'].includes(a));
+  const numArg = args.find(a => /^\d+$/.test(a));
+  const limit = numArg ? Math.min(parseInt(numArg, 10), 200) : 50;
+  const entries = db_helper.getLogs(limit, level);
 
   if (!entries.length) {
     return ctx.reply('📋 Логов нет' + (level ? ` уровня ${level}` : '') + '.');
@@ -1598,17 +1599,24 @@ bot.command(/^logs(\s+\w+)?$/, async (ctx) => {
     return `${icon} ${ts} [${e.type}]${user}\n    ${e.message}${det}`;
   });
 
-  const header = `📋 Последние логи${level ? ` (${level})` : ''} — ${entries.length} записей:\n\n`;
-  const body = lines.join('\n\n');
-  const footer = '\n\n/logs error — только ошибки\n/logs warn — предупреждения\n/logs info — инфо\n/logs clear — очистить';
+  const header = `📋 Логи${level ? ` (${level})` : ''} — ${entries.length} записей:\n\n`;
+  const footer = '\n\n/logs error — ошибки\n/logs error 100 — последние 100\n/logs warn — предупреждения\n/logs clear — очистить';
 
-  // Max message length is ~4096, split if needed
-  const full = header + body + footer;
-  if (full.length <= 4000) {
-    return ctx.reply(full);
+  const chunks: string[] = [];
+  let current = header;
+  for (const line of lines) {
+    if ((current + line + '\n\n').length > 3800) {
+      chunks.push(current);
+      current = '';
+    }
+    current += line + '\n\n';
   }
-  // Send truncated
-  return ctx.reply(header + lines.slice(0, 10).join('\n\n') + '\n\n⚠️ Показаны последние 10 из ' + entries.length + footer);
+  current += footer;
+  chunks.push(current);
+
+  for (const chunk of chunks) {
+    await ctx.reply(chunk);
+  }
 });
 
 bot.command('ban', async (ctx) => {
