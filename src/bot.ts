@@ -978,7 +978,7 @@ bot.on('message_created', async (ctx, next) => {
         const durationValue = user.video_duration.split(' ')[0];
         if (kieModel === 'bytedance/seedance-2') {
           const n = parseInt(durationValue, 10);
-          input.duration = [4, 8, 12].includes(n) ? n : 8;
+          input.duration = (n >= 4 && n <= 15) ? n : 8;
         } else if (kieModel.includes('seedance')) {
           // Seedance 1.5: строка
           const validDurations = ['4', '8', '12'];
@@ -1036,9 +1036,11 @@ bot.on('message_created', async (ctx, next) => {
       } else if (kieModel === 'bytedance/seedance-2') {
         const vp = parseVideoGenPrefs(user);
         input.resolution = '720p';
+        if (!input.duration) input.duration = 8;
         input.generate_audio = vp.seedance2_generate_audio;
         input.return_last_frame = false;
-        input.web_search = true;
+        input.web_search = false;
+        input.nsfw_checker = false;
 
         if (user.video_mode === 'photo_to_video' && user.stored_image_url) {
           const first = await uploadMediaUrlForKie(
