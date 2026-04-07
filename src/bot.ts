@@ -130,6 +130,10 @@ function maxCtxUserId(ctx: { user?: unknown }): string {
 
 const bot = new Bot(token);
 
+bot.api.setMyCommands([
+  { name: 'start', description: '🏠 Главное меню' },
+]);
+
 // --- HELPERS ---
 const sanitizeUrl = (url: string): string => {
   if (!url) return url;
@@ -198,27 +202,31 @@ const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cos
         
         if (imageUrl) {
           db_helper.updatePhotoGenerationStatus(taskId, 'success');
-          try {
-            const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-            const imageBuffer = Buffer.from(imageResponse.data);
-            const uploaded = await bot.api.uploadImage({ source: imageBuffer });
+          const photoButtons = Keyboard.inlineKeyboard([
+            [Keyboard.button.link('🔗 Скачать оригинал (без сжатия)', imageUrl)],
+            [Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]
+          ]);
+          let sent = false;
+          for (let dl = 0; dl < 3 && !sent; dl++) {
+            try {
+              const imageResponse = await axios.get(imageUrl, {
+                responseType: 'arraybuffer',
+                timeout: 60000
+              });
+              const imageBuffer = Buffer.from(imageResponse.data);
+              const uploaded = await bot.api.uploadImage({ source: imageBuffer });
+              await ctx.reply(`✅ Фото готово!\n\nСписано: ${cost} 🍌`, {
+                attachments: [uploaded.toJson(), photoButtons]
+              });
+              sent = true;
+            } catch (dlErr) {
+              logger.warn('photo_dl', `Download attempt ${dl + 1}/3 failed`, dlErr);
+              if (dl < 2) await sleep(3000);
+            }
+          }
+          if (!sent) {
             await ctx.reply(`✅ Фото готово!\n\nСписано: ${cost} 🍌`, {
-              attachments: [
-                uploaded.toJson(),
-                Keyboard.inlineKeyboard([
-                  [Keyboard.button.link('🔗 Скачать оригинал (без сжатия)', imageUrl)],
-                  [Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]
-                ])
-              ]
-            });
-          } catch {
-            await ctx.reply(`✅ Фото готово!\n\nСписано: ${cost} 🍌`, {
-              attachments: [
-                Keyboard.inlineKeyboard([
-                  [Keyboard.button.link('🔗 Скачать оригинал (без сжатия)', imageUrl)],
-                  [Keyboard.button.callback('🏠 В меню', 'main_menu_reply')]
-                ])
-              ]
+              attachments: [photoButtons]
             });
           }
           return;
@@ -666,7 +674,6 @@ bot.on('message_created', async (ctx, next) => {
         if (attachment.type === 'video') {
           const videoUrl = (attachment as any).payload.url;
           const cost = user.motion_quality === 'std' ? 15 : 30;
-          // Standard → Kling 2.6 MC, 720p; Pro → Kling 3.0 MC, 720p (Pro Kling 3.0)
           const internalModel = user.motion_quality === 'std' ? 'kling_2.6_motion' : 'kling_3_motion';
           const modelName =
             user.motion_quality === 'std'
@@ -675,6 +682,15 @@ bot.on('message_created', async (ctx, next) => {
 
           if (user.balance < cost) {
             return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${cost} 🍌).`);
+          }
+
+          const durProbe = await probeIncomingVideoDuration(attachment);
+          if (durProbe.seconds !== null && (durProbe.seconds < 3 || durProbe.seconds > 30)) {
+            const sec = Math.round(durProbe.seconds);
+            await ctx.reply(
+              `❌ Длительность видео ~${sec} сек. Motion Control принимает от 3 до 30 секунд.\n\nОбрежьте видео и попробуйте снова.`
+            );
+            return;
           }
 
           try {
