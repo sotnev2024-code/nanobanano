@@ -233,10 +233,17 @@ const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cos
           return;
         }
       } else if (info.data?.state === 'fail') {
+        const failReason = info.data.failMsg || info.data.failCode || 'unknown';
+        logger.error('polling', `Photo gen failed: ${failReason}`, {
+          taskId,
+          failCode: info.data.failCode,
+          failMsg: info.data.failMsg
+        });
         db_helper.updatePhotoGenerationStatus(taskId, 'fail');
         refundPhoto();
         await ctx.reply(
-          `❌ Ошибка при генерации фото.\n\n${cost} 🍌 возвращены на баланс.`
+          `❌ Ошибка при генерации фото.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}` +
+          `\n\nПричина: ${failReason}`
         );
         return;
       }
@@ -288,10 +295,17 @@ const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internal
             return;
           }
         } else if (info.data.successFlag === 2 || info.data.successFlag === 3) {
+          const failReason = info.data.errorMessage || info.data.errorCode || 'unknown';
+          logger.error('polling', `Veo gen failed [${modelName}]: ${failReason}`, {
+            taskId,
+            errorCode: info.data.errorCode,
+            errorMessage: info.data.errorMessage
+          });
           db_helper.updateGenerationStatus(taskId, 'fail');
           refundVideo();
           await ctx.reply(
-            `❌ Ошибка при генерации видео («${modelName}»).\n\n${cost} 🍌 возвращены на баланс.`
+            `❌ Ошибка при генерации видео («${modelName}»).${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}` +
+            `\n\nПричина: ${failReason}`
           );
           return;
         }
@@ -315,10 +329,17 @@ const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internal
             return;
           }
         } else if (info.data.state === 'fail') {
+          const failReason = info.data.failMsg || info.data.failCode || 'unknown';
+          logger.error('polling', `Video gen failed [${modelName}]: ${failReason}`, {
+            taskId,
+            failCode: info.data.failCode,
+            failMsg: info.data.failMsg
+          });
           db_helper.updateGenerationStatus(taskId, 'fail');
           refundVideo();
           await ctx.reply(
-            `❌ Ошибка при генерации видео («${modelName}»).\n\n${cost} 🍌 возвращены на баланс.`
+            `❌ Ошибка при генерации видео («${modelName}»).\n\n${actualCost > 0 ? `${actualCost} 🍌 возвращены на баланс.` : ''}` +
+            `\n\nПричина: ${failReason}`
           );
           return;
         }
