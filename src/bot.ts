@@ -242,8 +242,7 @@ const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cos
         db_helper.updatePhotoGenerationStatus(taskId, 'fail');
         refundPhoto();
         await ctx.reply(
-          `❌ Ошибка при генерации фото.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}` +
-          `\n\nПричина: ${failReason}`
+          `❌ Сервис генерации фото временно недоступен. Попробуйте позже.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`
         );
         return;
       }
@@ -304,8 +303,7 @@ const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internal
           db_helper.updateGenerationStatus(taskId, 'fail');
           refundVideo();
           await ctx.reply(
-            `❌ Ошибка при генерации видео («${modelName}»).${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}` +
-            `\n\nПричина: ${failReason}`
+            `❌ Сервис «${modelName}» временно недоступен. Попробуйте позже.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`
           );
           return;
         }
@@ -338,8 +336,7 @@ const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internal
           db_helper.updateGenerationStatus(taskId, 'fail');
           refundVideo();
           await ctx.reply(
-            `❌ Ошибка при генерации видео («${modelName}»).\n\n${actualCost > 0 ? `${actualCost} 🍌 возвращены на баланс.` : ''}` +
-            `\n\nПричина: ${failReason}`
+            `❌ Сервис «${modelName}» временно недоступен. Попробуйте позже.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`
           );
           return;
         }
