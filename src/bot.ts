@@ -187,8 +187,9 @@ const sendVideoResult = async (ctx: any, videoUrl: string, modelName: string, co
 };
 
 const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cost: number) => {
-  db_helper.updateBalance(userId, -cost);
-  const refundPhoto = () => db_helper.updateBalance(userId, cost);
+  const actualCost = isAdmin(userId) ? 0 : cost;
+  if (actualCost > 0) db_helper.updateBalance(userId, -actualCost);
+  const refundPhoto = () => { if (actualCost > 0) db_helper.updateBalance(userId, actualCost); };
 
   let attempts = 0;
   const maxAttempts = KIE_POLL_MAX_ATTEMPTS;
@@ -215,7 +216,7 @@ const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cos
               });
               const imageBuffer = Buffer.from(imageResponse.data);
               const uploaded = await bot.api.uploadImage({ source: imageBuffer });
-              await ctx.reply(`✅ Фото готово!\n\nСписано: ${cost} 🍌`, {
+              await ctx.reply(`✅ Фото готово!${actualCost > 0 ? `\n\nСписано: ${actualCost} 🍌` : ''}`, {
                 attachments: [uploaded.toJson(), photoButtons]
               });
               sent = true;
@@ -225,7 +226,7 @@ const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cos
             }
           }
           if (!sent) {
-            await ctx.reply(`✅ Фото готово!\n\nСписано: ${cost} 🍌`, {
+            await ctx.reply(`✅ Фото готово!${actualCost > 0 ? `\n\nСписано: ${actualCost} 🍌` : ''}`, {
               attachments: [photoButtons]
             });
           }
@@ -258,8 +259,9 @@ const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cos
 };
 
 const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internalModelId: string, cost: number) => {
-  db_helper.updateBalance(userId, -cost);
-  const refundVideo = () => db_helper.updateBalance(userId, cost);
+  const actualCost = isAdmin(userId) ? 0 : cost;
+  if (actualCost > 0) db_helper.updateBalance(userId, -actualCost);
+  const refundVideo = () => { if (actualCost > 0) db_helper.updateBalance(userId, actualCost); };
 
   let attempts = 0;
   const maxAttempts = KIE_POLL_MAX_ATTEMPTS;
@@ -591,7 +593,7 @@ bot.on('message_created', async (ctx, next) => {
     const cost = getPhotoGenerationBananaCost(modelId, prefs);
     const meta = PHOTO_MODEL_META[modelId];
 
-    if (user.balance < cost) {
+    if (!isAdmin(userId) && user.balance < cost) {
       return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${cost} 🍌).`);
     }
 
@@ -680,7 +682,7 @@ bot.on('message_created', async (ctx, next) => {
               ? 'Motion Control Standard (Kling 2.6 • 720p)'
               : 'Motion Control Pro (Kling 3.0 • 720p)';
 
-          if (user.balance < cost) {
+          if (!isAdmin(userId) && user.balance < cost) {
             return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${cost} 🍌).`);
           }
 
@@ -934,7 +936,7 @@ bot.on('message_created', async (ctx, next) => {
     db_helper.updateVideoSetting(userId, 'is_awaiting_prompt', 0);
 
     const videoCost = getVideoCost(user.video_model, user.video_duration);
-    if (user.balance < videoCost) {
+    if (!isAdmin(userId) && user.balance < videoCost) {
       return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${videoCost} 🍌).`);
     }
 
@@ -1167,7 +1169,7 @@ const runAvatarProGeneration = async (ctx: any, userId: string, prompt: string) 
     );
   }
   const cost = motionAudioBananaCost(durationSec);
-  if (user.balance < cost) {
+  if (!isAdmin(userId) && user.balance < cost) {
     return ctx.reply(
       `❌ Недостаточно бананов: нужно ${cost} 🍌 (≈ ${durationSec.toFixed(1)} с × 10 🍌/сек).`
     );
@@ -1218,7 +1220,7 @@ const runInfiniTalkGeneration = async (ctx: any, userId: string, prompt: string)
     );
   }
   const cost = motionAudioBananaCost(durationSec);
-  if (user.balance < cost) {
+  if (!isAdmin(userId) && user.balance < cost) {
     return ctx.reply(
       `❌ Недостаточно бананов: нужно ${cost} 🍌 (≈ ${durationSec.toFixed(1)} с × 10 🍌/сек).`
     );
