@@ -348,6 +348,56 @@ export const db_helper = {
       .all() as LogEntry[];
   },
 
+  /** Все генерации (видео + фото) за дату для Excel-выгрузки полного цикла. */
+  getGenerationsForDateExport: (datePrefix: string): Array<{
+    created_at: string;
+    user_id: string | null;
+    kind: string;
+    model: string;
+    prompt: string | null;
+    task_id: string;
+    status: string;
+    error_msg: string | null;
+  }> => {
+    const videoRows = db.prepare(`
+      SELECT
+        g.created_at,
+        g.user_id,
+        'Видео' AS kind,
+        g.model,
+        g.prompt,
+        g.task_id,
+        g.status,
+        (SELECT message FROM logs
+         WHERE level = 'error' AND details LIKE '%' || g.task_id || '%'
+         ORDER BY id DESC LIMIT 1) AS error_msg
+      FROM generations g
+      WHERE g.created_at LIKE ?
+      ORDER BY g.id ASC
+    `).all(`${datePrefix}%`) as any[];
+
+    const photoRows = db.prepare(`
+      SELECT
+        g.created_at,
+        g.user_id,
+        'Фото' AS kind,
+        g.model,
+        g.prompt,
+        g.task_id,
+        g.status,
+        (SELECT message FROM logs
+         WHERE level = 'error' AND details LIKE '%' || g.task_id || '%'
+         ORDER BY id DESC LIMIT 1) AS error_msg
+      FROM photo_generations g
+      WHERE g.created_at LIKE ?
+      ORDER BY g.id ASC
+    `).all(`${datePrefix}%`) as any[];
+
+    return [...videoRows, ...photoRows].sort(
+      (a, b) => a.created_at.localeCompare(b.created_at)
+    );
+  },
+
   clearLogs: (): void => {
     db.prepare('DELETE FROM logs').run();
   },

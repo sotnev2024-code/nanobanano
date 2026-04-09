@@ -1665,39 +1665,96 @@ bot.command(/^logs(\s+.*)?$/, async (ctx) => {
     try {
       await ctx.reply(`⏳ Собираю логи за ${datePrefix} (МСК)…`);
       const entries = db_helper.getLogsForDatePrefix(datePrefix);
-      if (!entries.length) {
-        return ctx.reply(`📋 За ${datePrefix} записей в логах нет.`);
+      const generations = db_helper.getGenerationsForDateExport(datePrefix);
+
+      if (!entries.length && !generations.length) {
+        return ctx.reply(`📋 За ${datePrefix} записей нет.`);
       }
 
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'BananaBot';
       workbook.created = new Date();
 
-      const sheet = workbook.addWorksheet('Логи');
+      // ── Лист 1: Запросы (полный цикл) ──────────────────────────────────
+      const reqSheet = workbook.addWorksheet('Запросы');
+      reqSheet.columns = [
+        { header: 'Время (МСК)', key: 'created_at', width: 22 },
+        { header: 'User ID',     key: 'user_id',    width: 18 },
+        { header: 'Тип',         key: 'kind',       width: 8  },
+        { header: 'Модель',      key: 'model',      width: 22 },
+        { header: 'Промпт',      key: 'prompt',     width: 60 },
+        { header: 'Task ID',     key: 'task_id',    width: 36 },
+        { header: 'Статус',      key: 'status',     width: 12 },
+        { header: 'Ошибка / Ответ платформы', key: 'error_msg', width: 60 },
+      ];
+
+      const reqHeader = reqSheet.getRow(1);
+      reqHeader.font      = { bold: true, color: { argb: 'FFFFFFFF' } };
+      reqHeader.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B5E20' } };
+      reqHeader.alignment = { horizontal: 'center', vertical: 'middle' };
+      reqHeader.height    = 20;
+
+      const STATUS_LABEL: Record<string, string> = {
+        success: '✅ Успех',
+        fail:    '❌ Ошибка',
+        waiting: '⏳ Ожидание',
+      };
+      const STATUS_COLOR: Record<string, string> = {
+        success: 'FFE8F5E9',
+        fail:    'FFFFEBEE',
+        waiting: 'FFFFF9C4',
+      };
+
+      generations.forEach(g => {
+        const modelLabel = modelMap[g.model] ?? g.model;
+        const statusLabel = STATUS_LABEL[g.status] ?? g.status;
+        const bgColor = STATUS_COLOR[g.status] ?? 'FFFFFFFF';
+
+        // Convert UTC created_at to Moscow time string
+        const msk = new Date(g.created_at.replace(' ', 'T') + 'Z')
+          .toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+
+        const row = reqSheet.addRow({
+          created_at: msk,
+          user_id:    g.user_id ?? '',
+          kind:       g.kind,
+          model:      modelLabel,
+          prompt:     g.prompt ?? '',
+          task_id:    g.task_id,
+          status:     statusLabel,
+          error_msg:  g.error_msg ?? '',
+        });
+        row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgColor } };
+        row.alignment = { wrapText: true, vertical: 'top' };
+      });
+      reqSheet.autoFilter = { from: 'A1', to: 'H1' };
+
+      // ── Лист 2: Сырые логи ─────────────────────────────────────────────
+      const sheet = workbook.addWorksheet('Логи (сырые)');
       sheet.columns = [
-        { header: 'ID', key: 'id', width: 10 },
-        { header: 'Дата и время', key: 'created_at', width: 22 },
-        { header: 'Уровень', key: 'level', width: 10 },
-        { header: 'Тип', key: 'type', width: 18 },
-        { header: 'User ID', key: 'user_id', width: 18 },
-        { header: 'Сообщение', key: 'message', width: 70 },
-        { header: 'Детали', key: 'details', width: 90 }
+        { header: 'ID',          key: 'id',         width: 10 },
+        { header: 'Дата и время',key: 'created_at', width: 22 },
+        { header: 'Уровень',     key: 'level',      width: 10 },
+        { header: 'Тип',         key: 'type',       width: 18 },
+        { header: 'User ID',     key: 'user_id',    width: 18 },
+        { header: 'Сообщение',   key: 'message',    width: 70 },
+        { header: 'Детали',      key: 'details',    width: 90 },
       ];
       const headerRow = sheet.getRow(1);
-      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1565C0' } };
+      headerRow.font      = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1565C0' } };
       headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
-      headerRow.height = 20;
+      headerRow.height    = 20;
 
       entries.forEach((e, idx) => {
         const row = sheet.addRow({
-          id: e.id,
+          id:         e.id,
           created_at: e.created_at,
-          level: e.level,
-          type: e.type,
-          user_id: e.user_id ?? '',
-          message: e.message,
-          details: e.details ?? ''
+          level:      e.level,
+          type:       e.type,
+          user_id:    e.user_id ?? '',
+          message:    e.message,
+          details:    e.details ?? '',
         });
         if (idx % 2 === 0) {
           row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE3F2FD' } };
@@ -1725,7 +1782,10 @@ bot.command(/^logs(\s+.*)?$/, async (ctx) => {
 
       const fileAttach = new FileAttachment({ token: mediaToken });
       return ctx.reply(
-        `📋 Логи за ${datePrefix} (МСК)\n🕐 Выгрузка: ${now} МСК\n📊 Строк: ${entries.length}`,
+        `📋 Логи за ${datePrefix} (МСК)\n🕐 Выгрузка: ${now} МСК\n` +
+        `📊 Запросов: ${generations.length} | Логов: ${entries.length}\n` +
+        `Лист «Запросы» — полный цикл (промпт → ответ платформы)\n` +
+        `Лист «Логи (сырые)» — детальные записи`,
         { attachments: [fileAttach.toJson()] }
       );
     } catch (error) {
