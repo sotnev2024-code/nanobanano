@@ -285,9 +285,12 @@ const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cos
         });
         db_helper.updatePhotoGenerationStatus(taskId, 'fail');
         refundPhoto();
-        await ctx.reply(
-          `❌ Сервис генерации фото временно недоступен. Попробуйте позже.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`
-        );
+        const isGoogleFilter = typeof failReason === 'string' &&
+          (failReason.includes('Prohibited Use policy') || failReason.includes('filtered out') || failReason.includes('No images found'));
+        const photoFailMsg = isGoogleFilter
+          ? `⚠️ Изображение не прошло проверку платформы.\n\nПопробуйте другую фотографию или выберите другую модель.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`
+          : `❌ Сервис генерации фото временно недоступен. Попробуйте позже.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`;
+        await ctx.reply(photoFailMsg);
         return;
       }
     } catch (e) {
@@ -346,9 +349,11 @@ const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internal
           });
           db_helper.updateGenerationStatus(taskId, 'fail');
           refundVideo();
-          await ctx.reply(
-            `❌ Сервис «${modelName}» временно недоступен. Попробуйте позже.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`
-          );
+          const isTimeout = typeof failReason === 'string' && failReason.includes('timed out');
+          const veoFailMsg = isTimeout
+            ? `⏱ Сервис «${modelName}» не успел сгенерировать видео (превышено время ожидания).\n\nПопробуйте повторить запрос — обычно следующая попытка проходит успешно.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`
+            : `❌ Сервис «${modelName}» временно недоступен. Попробуйте позже.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`;
+          await ctx.reply(veoFailMsg);
           return;
         }
         // successFlag === 0 means still generating, continue polling
