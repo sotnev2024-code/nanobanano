@@ -163,6 +163,30 @@ function extractKieAudioAttachmentUrl(attachment: {
 }
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+function serializeVideoSendError(err: unknown): Record<string, unknown> {
+  if (axios.isAxiosError(err)) {
+    const d = err.response?.data;
+    const dataPreview =
+      typeof d === 'string'
+        ? d.slice(0, 500)
+        : Buffer.isBuffer(d)
+          ? `[buffer ${d.length} bytes]`
+          : d && typeof d === 'object'
+            ? JSON.stringify(d).slice(0, 500)
+            : undefined;
+    return {
+      message: err.message,
+      code: err.code,
+      status: err.response?.status,
+      dataPreview
+    };
+  }
+  if (err instanceof Error) {
+    return { message: err.message, name: err.name };
+  }
+  return { raw: String(err) };
+}
+
 /**
  * Отправляет готовое видео пользователю.
  * Пытается загрузить видео на Max Bot и отправить встроенным плеером.
@@ -174,16 +198,36 @@ const sendVideoResult = async (ctx: any, videoUrl: string, modelName: string, co
     [Keyboard.button.link('⬇️ Скачать видео', videoUrl)],
     [Keyboard.button.callback('🏠 Главное меню', 'main_menu_reply')]
   ]);
-  try {
-    const videoResponse = await axios.get(videoUrl, { responseType: 'arraybuffer', timeout: 120_000 });
-    const videoBuffer = Buffer.from(videoResponse.data);
-    const uploaded = await bot.api.uploadVideo({ source: videoBuffer, timeout: 120_000 });
-    const videoAttach = new VideoAttachment({ token: uploaded.token });
-    await ctx.reply(text, { attachments: [videoAttach.toJson(), buttons] });
-  } catch (uploadErr) {
-    logger.warn('video_send', 'Video upload to Max failed, sending link', uploadErr);
-    await ctx.reply(`${text}\n\n🔗 ${videoUrl}`, { attachments: [buttons] });
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const videoResponse = await axios.get(videoUrl, {
+        responseType: 'arraybuffer',
+        timeout: 120_000,
+        maxContentLength: 200 * 1024 * 1024,
+        maxBodyLength: 200 * 1024 * 1024
+      });
+      const videoBuffer = Buffer.from(videoResponse.data);
+      const uploaded = await bot.api.uploadVideo({ source: videoBuffer, timeout: 120_000 });
+      const videoAttach = new VideoAttachment({ token: uploaded.token });
+      await ctx.reply(text, { attachments: [videoAttach.toJson(), buttons] });
+      return;
+    } catch (uploadErr) {
+      lastErr = uploadErr;
+      logger.warn(
+        'video_send',
+        `Video send attempt ${attempt + 1}/3 failed`,
+        serializeVideoSendError(uploadErr)
+      );
+      if (attempt < 2) await sleep(4000);
+    }
   }
+  logger.warn(
+    'video_send',
+    'Video upload to Max failed after retries, sending link',
+    serializeVideoSendError(lastErr)
+  );
+  await ctx.reply(`${text}\n\n🔗 ${videoUrl}`, { attachments: [buttons] });
 };
 
 const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cost: number) => {
@@ -1587,6 +1631,16 @@ bot.command('admin', (ctx) => {
   });
 });
 
+/** Календарная дата (YYYY-MM-DD) по часовому поясу Москвы. */
+function getMoscowDatePrefix(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+}
+
 bot.command(/^logs(\s+.*)?$/, async (ctx) => {
   if (!ctx.user) return;
   const userId = maxCtxUserId(ctx);
@@ -1595,13 +1649,92 @@ bot.command(/^logs(\s+.*)?$/, async (ctx) => {
     return ctx.reply('❌ У вас нет прав доступа к этой команде.');
   }
 
-  const args = (ctx.match?.[1] || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const rawArgs = (ctx.match?.[1] || '').trim().split(/\s+/).filter(Boolean);
+  const argsLower = rawArgs.map((a) => a.toLowerCase());
 
-  if (args.includes('clear')) {
+  if (argsLower.includes('clear')) {
     db_helper.clearLogs();
     return ctx.reply('🗑 Логи очищены.');
   }
 
+  const exportIdx = argsLower.findIndex((a) => ['excel', 'xlsx', 'export'].includes(a));
+  if (exportIdx !== -1) {
+    const dateFromArg = rawArgs.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a));
+    const datePrefix = dateFromArg ?? getMoscowDatePrefix();
+
+    try {
+      await ctx.reply(`⏳ Собираю логи за ${datePrefix} (МСК)…`);
+      const entries = db_helper.getLogsForDatePrefix(datePrefix);
+      if (!entries.length) {
+        return ctx.reply(`📋 За ${datePrefix} записей в логах нет.`);
+      }
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'BananaBot';
+      workbook.created = new Date();
+
+      const sheet = workbook.addWorksheet('Логи');
+      sheet.columns = [
+        { header: 'ID', key: 'id', width: 10 },
+        { header: 'Дата и время', key: 'created_at', width: 22 },
+        { header: 'Уровень', key: 'level', width: 10 },
+        { header: 'Тип', key: 'type', width: 18 },
+        { header: 'User ID', key: 'user_id', width: 18 },
+        { header: 'Сообщение', key: 'message', width: 70 },
+        { header: 'Детали', key: 'details', width: 90 }
+      ];
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1565C0' } };
+      headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+      headerRow.height = 20;
+
+      entries.forEach((e, idx) => {
+        const row = sheet.addRow({
+          id: e.id,
+          created_at: e.created_at,
+          level: e.level,
+          type: e.type,
+          user_id: e.user_id ?? '',
+          message: e.message,
+          details: e.details ?? ''
+        });
+        if (idx % 2 === 0) {
+          row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE3F2FD' } };
+        }
+      });
+      sheet.autoFilter = { from: 'A1', to: 'G1' };
+
+      const now = new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+      const fileName = `logs_${datePrefix}.xlsx`;
+      const excelBuffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+      const uploadInfo = await (bot.api as any).raw.uploads.getUploadUrl({ type: 'file' });
+      const formData = new FormData();
+      formData.append(
+        'data',
+        new Blob([excelBuffer], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        }),
+        fileName
+      );
+      const uploadRes = await fetch(uploadInfo.url, { method: 'POST', body: formData });
+      const uploadResult = (await uploadRes.json()) as any;
+      const mediaToken: string = uploadResult?.token ?? uploadInfo?.token;
+      if (!mediaToken) throw new Error('No media token received from upload');
+
+      const fileAttach = new FileAttachment({ token: mediaToken });
+      return ctx.reply(
+        `📋 Логи за ${datePrefix} (МСК)\n🕐 Выгрузка: ${now} МСК\n📊 Строк: ${entries.length}`,
+        { attachments: [fileAttach.toJson()] }
+      );
+    } catch (error) {
+      logger.error('admin', 'Logs Excel export error', error);
+      return ctx.reply('❌ Не удалось сформировать Excel. Попробуйте позже.');
+    }
+  }
+
+  const args = argsLower;
   const level = args.find(a => ['error', 'warn', 'info'].includes(a));
   const numArg = args.find(a => /^\d+$/.test(a));
   const limit = numArg ? Math.min(parseInt(numArg, 10), 200) : 50;
@@ -1622,7 +1755,11 @@ bot.command(/^logs(\s+.*)?$/, async (ctx) => {
   });
 
   const header = `📋 Логи${level ? ` (${level})` : ''} — ${entries.length} записей:\n\n`;
-  const footer = '\n\n/logs error — ошибки\n/logs error 100 — последние 100\n/logs warn — предупреждения\n/logs clear — очистить';
+  const footer =
+    '\n\n/logs error — ошибки\n/logs error 100 — последние 100\n/logs warn — предупреждения\n' +
+    '/logs excel — все логи за сегодня (МСК) в Excel\n' +
+    '/logs excel 2026-04-09 — логи за указанную дату\n' +
+    '/logs clear — очистить';
 
   const chunks: string[] = [];
   let current = header;

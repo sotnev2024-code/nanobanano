@@ -300,6 +300,13 @@ export const db_helper = {
       .all(limit) as LogEntry[];
   },
 
+  /** Все логи за календарный день (created_at хранится как YYYY-MM-DD …). */
+  getLogsForDatePrefix: (datePrefix: string): LogEntry[] => {
+    return db
+      .prepare('SELECT * FROM logs WHERE created_at LIKE ? ORDER BY created_at ASC, id ASC')
+      .all(`${datePrefix}%`) as LogEntry[];
+  },
+
   /** Все записи видео-генераций с промптами (для выгрузки админом). */
   getGenerationsForPromptExport: (): Array<{
     id: number;
