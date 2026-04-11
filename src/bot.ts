@@ -60,6 +60,16 @@ const BANNED_WORDS: string[] = [
   // Русские вариации
   'порно', 'секс видео', 'детское порно', 'голые дети', 'голый ребёнок',
   'педофил', 'инцест', 'раздеть ребён', 'несовершеннолетн',
+  // Русский NSFW (взрослый контент)
+  'голая', 'голый', 'голую', 'голым', 'голой', 'голых',
+  'обнажённ', 'обнаженн', 'раздет',
+  'сиськ', 'сиси', 'сисек', 'сисик',
+  'сосок', 'соски', 'сосков',
+  'трусик', 'без трусов', 'без белья', 'без одежды',
+  'минет', 'оральн', 'аналь',
+  'сперм', 'мастурб', 'оргазм',
+  'член ', 'хуй', 'вагин', 'влагалищ', 'писька', 'писка',
+  'эроти', 'порнограф',
 ];
 
 /**
@@ -999,6 +1009,14 @@ bot.on('message_created', async (ctx, next) => {
       return ctx.reply('❌ Grok Img→Video требует фото. Сначала загрузите изображение (отправьте его в чат).');
     }
 
+    // Seedance 2.0 имеет жёсткое ограничение на длину промпта (1536 символов)
+    if (user.video_model === 'seedance_2' && prompt.length > 1536) {
+      return ctx.reply(
+        `❌ Промпт для Seedance 2.0 слишком длинный: ${prompt.length} символов.\n\n` +
+        `Максимум — 1536 символов. Сократите описание примерно на ${prompt.length - 1536} символов и попробуйте снова.`
+      );
+    }
+
     // Reset awaiting status and stored media after task creation
     db_helper.updateVideoSetting(userId, 'is_awaiting_prompt', 0);
 
@@ -1843,12 +1861,14 @@ bot.command(/^logs(\s+.*)?$/, async (ctx) => {
   }
 });
 
-bot.command('ban', async (ctx) => {
+bot.command(/^ban(\s+.*)?$/, async (ctx) => {
   if (!ctx.user || !ctx.message) return;
-  const adminId = (ctx.user as any).user_id?.toString();
+  const adminId = maxCtxUserId(ctx);
   if (!adminId || !isAdmin(adminId)) return ctx.reply('❌ Нет прав.');
 
-  const targetId = ctx.message.body.text?.replace(/^\/ban\s*/, '').trim();
+  const argFromMatch = (ctx.match?.[1] || '').trim();
+  const argFromText = (ctx.message.body.text || '').replace(/^\/ban(@\S+)?\s*/i, '').trim();
+  const targetId = (argFromMatch || argFromText).split(/\s+/)[0];
   if (!targetId) return ctx.reply('❌ Укажите ID пользователя: /ban <user_id>');
 
   const target = db_helper.getUser(targetId);
@@ -1860,12 +1880,14 @@ bot.command('ban', async (ctx) => {
   return ctx.reply(`✅ Пользователь ${targetId} заблокирован.`);
 });
 
-bot.command('unban', async (ctx) => {
+bot.command(/^unban(\s+.*)?$/, async (ctx) => {
   if (!ctx.user || !ctx.message) return;
-  const adminId = (ctx.user as any).user_id?.toString();
+  const adminId = maxCtxUserId(ctx);
   if (!adminId || !isAdmin(adminId)) return ctx.reply('❌ Нет прав.');
 
-  const targetId = (ctx.message as any).body.text?.replace(/^\/unban\s*/, '').trim();
+  const argFromMatch = (ctx.match?.[1] || '').trim();
+  const argFromText = (ctx.message.body.text || '').replace(/^\/unban(@\S+)?\s*/i, '').trim();
+  const targetId = (argFromMatch || argFromText).split(/\s+/)[0];
   if (!targetId) return ctx.reply('❌ Укажите ID пользователя: /unban <user_id>');
 
   const target = db_helper.getUser(targetId);
