@@ -1491,7 +1491,10 @@ bot.action(/^photo_pick_(s5|s45|nbp|nb2)$/, (ctx) => {
 
   db_helper.updateVideoSetting(userId, 'photo_kie_model', modelId);
   persistPhotoMenuMessageId(ctx, userId);
-  const user = db_helper.getUser(userId)!;
+  const user = db_helper.getUser(userId);
+  if (!user) {
+    return ctx.answerOnCallback({ notification: 'Сессия устарела — отправьте /start' });
+  }
   return ctx.editMessage({
     text: getPhotoMenuText(user),
     attachments: [getPhotoMenuKeyboard(user)]
@@ -1504,7 +1507,10 @@ bot.action('photo_back_to_refs', (ctx) => {
   clearPhotoKieSelection(userId);
   db_helper.updateVideoSetting(userId, 'photo_state', 'awaiting_refs');
   persistPhotoMenuMessageId(ctx, userId);
-  const user = db_helper.getUser(userId)!;
+  const user = db_helper.getUser(userId);
+  if (!user) {
+    return ctx.answerOnCallback({ notification: 'Сессия устарела — отправьте /start' });
+  }
   return ctx.editMessage({
     text: getPhotoMenuText(user),
     attachments: [getPhotoMenuKeyboard(user)]
