@@ -394,9 +394,23 @@ const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internal
           });
           db_helper.updateGenerationStatus(taskId, 'fail');
           refundVideo();
-          await ctx.reply(
-            `❌ Сервис «${modelName}» временно недоступен. Попробуйте позже.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`
-          );
+          const refund = actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : '';
+          const fr = typeof failReason === 'string' ? failReason : '';
+          const isBadRef = /character.*(reference|first frame).*invalid|invalid.*character|input was rejected/i.test(fr);
+          const isServerBusy = /server exception|internal error|timed out|try again later/i.test(fr);
+          let msg: string;
+          if (isBadRef) {
+            msg = `⚠️ «${modelName}» не смог распознать человека на референсе.\n\n` +
+                  `Попробуйте:\n` +
+                  `• загрузить более чёткое фото лица/фигуры человека\n` +
+                  `• убедитесь, что на первом кадре видео хорошо виден человек\n` +
+                  `• или выберите другую модель${refund}`;
+          } else if (isServerBusy) {
+            msg = `⏱ Сервис «${modelName}» сейчас перегружен.\n\nПопробуйте повторить запрос через несколько минут.${refund}`;
+          } else {
+            msg = `❌ Сервис «${modelName}» временно недоступен. Попробуйте позже.${refund}`;
+          }
+          await ctx.reply(msg);
           return;
         }
       }
