@@ -198,6 +198,44 @@ function serializeVideoSendError(err: unknown): Record<string, unknown> {
 }
 
 /**
+ * Загружает буфер видео в MAX-CDN, обходя баг библиотеки @maxhub/max-bot-api.
+ *
+ * Библиотечный uploadVideo делает `await res.json()`, но MAX иногда отдаёт
+ * XML вида `<retval>1</retval>` (формат успеха для крупных файлов). Это
+ * приводит к SyntaxError. Мы читаем ответ как text и обрабатываем оба формата.
+ * Токен файла приходит ещё на этапе getUploadUrl, поэтому при XML-успехе
+ * используем именно его (так делает и сам библиотечный uploadFromStream).
+ */
+async function uploadVideoBufferToMax(videoBuffer: Buffer): Promise<string> {
+  const uploadInfo = await (bot.api as any).raw.uploads.getUploadUrl({ type: 'video' });
+  const presignedToken: string | undefined = uploadInfo?.token;
+  const uploadUrl: string | undefined = uploadInfo?.url;
+  if (!uploadUrl) throw new Error('MAX getUploadUrl: no url');
+
+  const formData = new FormData();
+  formData.append('data', new Blob([new Uint8Array(videoBuffer)]), `video-${Date.now()}.mp4`);
+
+  const res = await fetch(uploadUrl, { method: 'POST', body: formData });
+  const respText = await res.text();
+
+  // Сначала пытаемся как JSON
+  try {
+    const json = JSON.parse(respText);
+    if (json?.token) return String(json.token);
+    if (presignedToken) return presignedToken;
+    throw new Error(`MAX upload: JSON without token (${respText.slice(0, 200)})`);
+  } catch (jsonErr) {
+    // XML-ответ от MAX-CDN. <retval>1</retval> = успех, токен берём из getUploadUrl
+    if (/<retval>\s*1\s*<\/retval>/i.test(respText) && presignedToken) {
+      return presignedToken;
+    }
+    throw new Error(
+      `MAX upload failed (HTTP ${res.status}): ${respText.slice(0, 200)}`
+    );
+  }
+}
+
+/**
  * Отправляет готовое видео пользователю.
  * Пытается загрузить видео на Max Bot и отправить встроенным плеером.
  * При ошибке загрузки — отправляет текст со ссылкой.
@@ -218,8 +256,8 @@ const sendVideoResult = async (ctx: any, videoUrl: string, modelName: string, co
         maxBodyLength: 200 * 1024 * 1024
       });
       const videoBuffer = Buffer.from(videoResponse.data);
-      const uploaded = await bot.api.uploadVideo({ source: videoBuffer, timeout: 120_000 });
-      const videoAttach = new VideoAttachment({ token: uploaded.token });
+      const token = await uploadVideoBufferToMax(videoBuffer);
+      const videoAttach = new VideoAttachment({ token });
       await ctx.reply(text, { attachments: [videoAttach.toJson(), buttons] });
       return;
     } catch (uploadErr) {
@@ -295,12 +333,22 @@ const pollPhotoTaskStatus = async (ctx: any, taskId: string, userId: string, cos
         });
         db_helper.updatePhotoGenerationStatus(taskId, 'fail');
         refundPhoto();
-        const isGoogleFilter = typeof failReason === 'string' &&
-          (failReason.includes('Prohibited Use policy') || failReason.includes('filtered out') || failReason.includes('No images found'));
-        const photoFailMsg = isGoogleFilter
-          ? `⚠️ Изображение не прошло проверку платформы.\n\nПопробуйте другую фотографию или выберите другую модель.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`
-          : `❌ Сервис генерации фото временно недоступен. Попробуйте позже.${actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : ''}`;
-        await ctx.reply(photoFailMsg);
+        const refund = actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : '';
+        const fr = typeof failReason === 'string' ? failReason : '';
+        const isGoogleFilter = /Prohibited Use policy|filtered out|No images found|image was filtered/i.test(fr);
+        const isContentMod = /flagged as sensitive|content moderation|text content failed the review/i.test(fr);
+        const isOverload = /Models task execute failed|high demand|currently unavailable|internal error|please try again/i.test(fr);
+        let msg: string;
+        if (isGoogleFilter) {
+          msg = `🚫 Изображение или промпт не прошли проверку Google.\n\nИзмените запрос или загрузите другое фото — либо выберите другую модель.${refund}`;
+        } else if (isContentMod) {
+          msg = `🚫 Запрос или фото не прошли проверку контента платформы.\n\nИзмените описание или замените фото и попробуйте снова.${refund}`;
+        } else if (isOverload) {
+          msg = `⏱ Сервис сейчас перегружен.\n\nПопробуйте через 5-10 минут или выберите другую модель.${refund}`;
+        } else {
+          msg = `❌ Сервис генерации фото временно недоступен. Попробуйте позже.${refund}`;
+        }
+        await ctx.reply(msg);
         return;
       }
     } catch (e) {
@@ -397,7 +445,9 @@ const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internal
           const refund = actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : '';
           const fr = typeof failReason === 'string' ? failReason : '';
           const isBadRef = /character.*(reference|first frame).*invalid|invalid.*character|input was rejected/i.test(fr);
-          const isServerBusy = /server exception|internal error|timed out|try again later/i.test(fr);
+          const isOutputSafety = /output video may|output was flagged|content moderation|flagged as sensitive/i.test(fr);
+          const isOverload = /server exception|Models task execute failed|high demand|currently unavailable|Internal Error/i.test(fr);
+          const isTransient = /internal error|timed out|try again later/i.test(fr);
           let msg: string;
           if (isBadRef) {
             msg = `⚠️ «${modelName}» не смог распознать человека на референсе.\n\n` +
@@ -405,8 +455,12 @@ const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internal
                   `• загрузить более чёткое фото лица/фигуры человека\n` +
                   `• убедитесь, что на первом кадре видео хорошо виден человек\n` +
                   `• или выберите другую модель${refund}`;
-          } else if (isServerBusy) {
-            msg = `⏱ Сервис «${modelName}» сейчас перегружен.\n\nПопробуйте повторить запрос через несколько минут.${refund}`;
+          } else if (isOutputSafety) {
+            msg = `🚫 Сгенерированное видео или промпт не прошли проверку контента «${modelName}».\n\nИзмените описание или загрузите другое фото и попробуйте снова.${refund}`;
+          } else if (isOverload) {
+            msg = `⏱ Сервис «${modelName}» сейчас перегружен.\n\nПопробуйте через 5-10 минут или выберите другую модель.${refund}`;
+          } else if (isTransient) {
+            msg = `⚠️ «${modelName}» вернул временную ошибку.\n\nПопробуйте повторить запрос через минуту.${refund}`;
           } else {
             msg = `❌ Сервис «${modelName}» временно недоступен. Попробуйте позже.${refund}`;
           }
@@ -616,7 +670,12 @@ bot.on('message_created', async (ctx, next) => {
         logger.error('photo_prompt', 'Photo analysis error', error);
         db_helper.updateVideoSetting(userId, 'photo_prompt_upload_count', 0);
         db_helper.updateVideoSetting(userId, 'photo_prompt_menu_message_id', null);
-        await ctx.reply('❌ Ошибка при анализе фото. Попробуйте другое изображение или зайдите позже.');
+        const em = ((error as any)?.message || '') + ' ' + JSON.stringify((error as any)?.response?.data || {});
+        const isMaintenance = /maintained|currently being maintained|503|temporarily unavailable/i.test(em);
+        const msg = isMaintenance
+          ? '⏱ Сервис анализа фото сейчас на техобслуживании.\n\nПопробуйте через 1-2 минуты — обычно восстанавливается быстро.'
+          : '❌ Не удалось проанализировать фото.\n\nПопробуйте загрузить другое изображение или вернитесь чуть позже.';
+        await ctx.reply(msg);
       }
       return;
     }
