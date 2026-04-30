@@ -33,7 +33,20 @@ import {
 } from './handlers/photo_prompt';
 import { getAdminPanelText, getAdminPanelKeyboard } from './handlers/admin';
 import { getBillingMenuText, getBillingMenuKeyboard } from './handlers/billing';
+import {
+  MUSIC_COST,
+  MUSIC_MODE_LABEL,
+  getMusicMenuText,
+  getMusicMenuKeyboard,
+  getMusicCustomStepPrompt,
+  getMusicCustomVocalKeyboard,
+  parseMusicDraft,
+  saveMusicDraft,
+  clearMusicDraft,
+  type MusicMode
+} from './handlers/music';
 import { kie_api, uploadMediaUrlForKie } from './utils/kie_api';
+import { suno_api, isSunoCompleted, isSunoFailed, type SunoTrack } from './utils/suno_api';
 import { tbank, PACKS } from './utils/tbank';
 import { logger } from './utils/logger';
 import { probeIncomingVideoDuration, tryDurationFromMediaUrl } from './utils/video_duration';
@@ -487,6 +500,177 @@ const pollTaskStatus = async (ctx: any, taskId: string, userId: string, internal
   );
 };
 
+// ─── Suno music: генерация, поллинг, доставка ───────────────────────────
+async function runMusicGeneration(ctx: any, userId: string, mode: MusicMode) {
+  const user = db_helper.getUser(userId);
+  if (!user) return;
+  const draft = parseMusicDraft(user);
+  if (!draft.prompt || !draft.prompt.trim()) {
+    return ctx.reply('❌ Не задан промпт. Начни заново — нажми «🎵 Музыка» в главном меню.');
+  }
+
+  const cost = MUSIC_COST[mode];
+  if (!isAdmin(userId) && user.balance < cost) {
+    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${cost} 🍌).`);
+  }
+
+  // Сбрасываем стейт перед запуском
+  db_helper.updateVideoSetting(userId, 'music_state', 'idle');
+
+  await ctx.reply('⏳ Запускаю генерацию музыки... Это займёт 1-3 минуты. Suno пришлёт два варианта трека.');
+
+  try {
+    const isInstrumental = mode === 'instrumental';
+    const isCustom = mode === 'custom';
+    const params: any = {
+      prompt: draft.prompt,
+      customMode: isCustom,
+      instrumental: isInstrumental,
+      model: 'V5_5',
+    };
+    if (isCustom) {
+      if (draft.style) params.style = draft.style;
+      if (draft.title) params.title = draft.title;
+      if (draft.vocalGender) params.vocalGender = draft.vocalGender;
+    }
+
+    logger.info('music_gen', 'Suno task payload', {
+      mode,
+      promptLen: draft.prompt.length,
+      customMode: isCustom,
+      instrumental: isInstrumental,
+      hasStyle: !!draft.style,
+      hasTitle: !!draft.title,
+      vocalGender: draft.vocalGender || 'auto'
+    });
+
+    const task = await suno_api.createTask(params);
+    logger.info('music_gen', 'Suno createTask response', {
+      code: task.code,
+      msg: task.msg,
+      taskId: task.data?.taskId
+    });
+
+    if (task.code === 200 && task.data?.taskId) {
+      const taskId = task.data.taskId;
+      db_helper.updateVideoSetting(userId, 'last_task_id', taskId);
+      db_helper.logMusicGeneration(userId, mode, 'waiting', taskId, {
+        prompt: draft.prompt,
+        style: draft.style,
+        title: draft.title,
+        instrumental: isInstrumental,
+        customMode: isCustom
+      });
+      clearMusicDraft(userId);
+      pollMusicTaskStatus(ctx, taskId, userId, mode, cost);
+    } else {
+      logger.error('music_gen', 'Suno API returned non-200', task);
+      await ctx.reply('❌ Сервис генерации музыки временно недоступен. Попробуйте позже.');
+    }
+  } catch (err: any) {
+    logger.error('music_gen', 'Music generation error', err?.response?.data || err?.message);
+    await ctx.reply('❌ Ошибка при запуске генерации музыки. Попробуйте позже.');
+  }
+}
+
+const pollMusicTaskStatus = async (ctx: any, taskId: string, userId: string, mode: MusicMode, cost: number) => {
+  const actualCost = isAdmin(userId) ? 0 : cost;
+  if (actualCost > 0) db_helper.updateBalance(userId, -actualCost);
+  const refundMusic = () => { if (actualCost > 0) db_helper.updateBalance(userId, actualCost); };
+
+  let attempts = 0;
+  const maxAttempts = KIE_POLL_MAX_ATTEMPTS;
+  while (attempts < maxAttempts) {
+    try {
+      const info = await suno_api.getRecordInfo(taskId);
+      const data = info.data;
+
+      if (isSunoCompleted(data)) {
+        const tracks = data?.response?.sunoData || [];
+        if (tracks.length > 0) {
+          db_helper.updateMusicGenerationStatus(taskId, 'success');
+          await sendMusicResult(ctx, tracks, mode, cost);
+          return;
+        }
+      }
+
+      const failCheck = isSunoFailed(data);
+      if (failCheck.failed) {
+        const reason = failCheck.reason;
+        logger.error('polling', `Music gen failed: ${reason}`, { taskId, status: data?.status });
+        db_helper.updateMusicGenerationStatus(taskId, 'fail');
+        refundMusic();
+        const refund = actualCost > 0 ? `\n\n${actualCost} 🍌 возвращены на баланс.` : '';
+        const isModeration = /sensitive|moderation|forbidden/i.test(reason);
+        const msg = isModeration
+          ? `🚫 Запрос не прошёл проверку контента Suno.\n\nИзмените описание и попробуйте снова.${refund}`
+          : `❌ Сервис генерации музыки вернул ошибку. Попробуйте позже.${refund}`;
+        await ctx.reply(msg);
+        return;
+      }
+    } catch (e) {
+      logger.error('polling', 'Music polling error', e);
+    }
+
+    attempts++;
+    await sleep(KIE_POLL_INTERVAL_MS);
+  }
+
+  // Таймаут
+  db_helper.updateMusicGenerationStatus(taskId, 'fail');
+  refundMusic();
+  const balM = db_helper.getUser(userId)?.balance ?? 0;
+  await ctx.reply(
+    `❌ Генерация музыки не завершилась за ${KIE_POLL_MAX_MINUTES} мин.\n\n` +
+    `${cost} 🍌 возвращены на баланс (сейчас: ${balM} 🍌).\n\n` +
+    `Suno может задержать обработку — попробуйте чуть позже.`
+  );
+};
+
+const sendMusicResult = async (ctx: any, tracks: SunoTrack[], mode: MusicMode, cost: number) => {
+  const total = tracks.length;
+  await ctx.reply(`✅ Готово! Suno прислал ${total} ${total === 1 ? 'трек' : 'трека'} (${MUSIC_MODE_LABEL[mode]})`);
+
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i];
+    const audioUrl = t.audioUrl || t.streamAudioUrl;
+    const lines: string[] = [`🎵 Вариант ${i + 1}${total > 1 ? ` из ${total}` : ''}`];
+    if (t.title) lines.push(`📛 ${t.title}`);
+    if (t.tags) lines.push(`🎨 ${t.tags}`);
+    if (typeof t.duration === 'number') lines.push(`⏱ ${Math.round(t.duration)} сек`);
+    if (audioUrl) lines.push(`🔗 ${audioUrl}`);
+    if (t.imageUrl) lines.push(`🖼 Обложка: ${t.imageUrl}`);
+
+    const text = lines.join('\n');
+    const buttons: any[][] = [];
+    if (audioUrl) buttons.push([Keyboard.button.link('⬇️ Скачать трек', audioUrl)]);
+    if (t.imageUrl) buttons.push([Keyboard.button.link('🖼 Обложка', t.imageUrl)]);
+
+    const lastTrack = i === tracks.length - 1;
+    if (lastTrack) buttons.push([Keyboard.button.callback('🏠 Главное меню', 'main_menu_reply')]);
+
+    try {
+      if (buttons.length > 0) {
+        await ctx.reply(text, { attachments: [Keyboard.inlineKeyboard(buttons)] });
+      } else {
+        await ctx.reply(text);
+      }
+      // Lyrics — отдельным сообщением, если есть и не пустой
+      if (t.prompt && t.prompt.trim() && t.prompt.length < 4000) {
+        await ctx.reply(`📝 Текст трека «${t.title || `вариант ${i + 1}`}»:\n\n${t.prompt}`);
+      }
+    } catch (e) {
+      logger.warn('music_send', 'Failed to send music result', e);
+    }
+  }
+
+  if (cost > 0 && !isAdmin(maxCtxUserId(ctx))) {
+    // Информируем о списании в финале
+    const bal = db_helper.getUser(maxCtxUserId(ctx))?.balance ?? 0;
+    await ctx.reply(`💰 Списано: ${cost} 🍌\n🍌 Баланс: ${bal}`);
+  }
+};
+
 // --- HANDLERS ---
 bot.on('message_created', async (ctx, next) => {
   if (!ctx.user) return next();
@@ -615,6 +799,72 @@ bot.on('message_created', async (ctx, next) => {
       await ctx.reply('❌ Неверный формат. Используйте: ID количество');
     }
     return;
+  }
+
+  // ── Музыка (Suno V5_5): пошаговый ввод текста ────────────────────────
+  if (user.music_state && user.music_state !== 'idle') {
+    const text = (ctx.message.body.text || '').trim();
+    if (!text) return;  // игнорируем не-текстовые сообщения
+
+    const draft = parseMusicDraft(user);
+
+    if (user.music_state === 'awaiting_simple_prompt') {
+      if (text.length > 500) {
+        await ctx.reply(`❌ Промпт слишком длинный: ${text.length}. Максимум 500 символов в простом режиме.`);
+        return;
+      }
+      saveMusicDraft(userId, { ...draft, prompt: text });
+      await runMusicGeneration(ctx, userId, 'simple');
+      return;
+    }
+
+    if (user.music_state === 'awaiting_instrumental_prompt') {
+      if (text.length > 500) {
+        await ctx.reply(`❌ Промпт слишком длинный: ${text.length}. Максимум 500 символов.`);
+        return;
+      }
+      saveMusicDraft(userId, { ...draft, prompt: text });
+      await runMusicGeneration(ctx, userId, 'instrumental');
+      return;
+    }
+
+    if (user.music_state === 'awaiting_custom_prompt') {
+      if (text.length > 3000) {
+        await ctx.reply(`❌ Промпт слишком длинный: ${text.length}. Максимум 3000 символов в кастом-режиме.`);
+        return;
+      }
+      const newDraft = { ...draft, prompt: text };
+      saveMusicDraft(userId, newDraft);
+      db_helper.updateVideoSetting(userId, 'music_state', 'awaiting_custom_style');
+      await ctx.reply(getMusicCustomStepPrompt('awaiting_custom_style', newDraft));
+      return;
+    }
+
+    if (user.music_state === 'awaiting_custom_style') {
+      if (text.length > 200) {
+        await ctx.reply(`❌ Стиль слишком длинный: ${text.length}. Максимум 200 символов.`);
+        return;
+      }
+      const newDraft = { ...draft, style: text };
+      saveMusicDraft(userId, newDraft);
+      db_helper.updateVideoSetting(userId, 'music_state', 'awaiting_custom_title');
+      await ctx.reply(getMusicCustomStepPrompt('awaiting_custom_title', newDraft));
+      return;
+    }
+
+    if (user.music_state === 'awaiting_custom_title') {
+      if (text.length > 80) {
+        await ctx.reply(`❌ Название слишком длинное: ${text.length}. Максимум 80 символов.`);
+        return;
+      }
+      const newDraft = { ...draft, title: text };
+      saveMusicDraft(userId, newDraft);
+      db_helper.updateVideoSetting(userId, 'music_state', 'awaiting_custom_vocal');
+      await ctx.reply(getMusicCustomStepPrompt('awaiting_custom_vocal', newDraft), {
+        attachments: [getMusicCustomVocalKeyboard()]
+      });
+      return;
+    }
   }
 
   // Handle Seedance 2.0: загрузка last frame
@@ -1346,6 +1596,9 @@ const getMainMenuKeyboard = () => {
     [
       Keyboard.button.callback('Создать фото', 'create_photo'),
       Keyboard.button.callback('Фото=промт', 'photo_prompt')
+    ],
+    [
+      Keyboard.button.callback('🎵 Музыка', 'create_music')
     ],
     [
       Keyboard.button.callback('Пополнить', 'top_up'),
@@ -2300,6 +2553,104 @@ bot.action('create_video', (ctx) => {
   });
 });
 
+// ── Music (Suno V5_5) ─────────────────────────────────────────────────
+bot.action('create_music', (ctx) => {
+  if (!ctx.user) return;
+  const userId = maxCtxUserId(ctx);
+  const user = db_helper.getUser(userId);
+  if (!user) return;
+  // Сбрасываем чужие стейты и черновик музыки
+  db_helper.updateVideoSetting(userId, 'is_awaiting_prompt', 0);
+  db_helper.updateVideoSetting(userId, 'photo_state', 'idle');
+  db_helper.updateVideoSetting(userId, 'photo_prompt_state', 'idle');
+  db_helper.updateVideoSetting(userId, 'motion_state', 'idle');
+  db_helper.updateVideoSetting(userId, 'seedance_state', 'idle');
+  clearMusicDraft(userId);
+  const updated = db_helper.getUser(userId)!;
+  return ctx.editMessage({
+    text: getMusicMenuText(updated),
+    attachments: [getMusicMenuKeyboard()]
+  });
+});
+
+bot.action('music_simple', (ctx) => {
+  if (!ctx.user) return;
+  const userId = maxCtxUserId(ctx);
+  const user = db_helper.getUser(userId);
+  if (!user) return;
+  if (!isAdmin(userId) && user.balance < MUSIC_COST.simple) {
+    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${MUSIC_COST.simple} 🍌).`);
+  }
+  db_helper.updateVideoSetting(userId, 'music_state', 'awaiting_simple_prompt');
+  saveMusicDraft(userId, {});
+  return ctx.reply(
+    '🎤 Простой режим\n\n' +
+    'Опиши песню одним сообщением (до 500 символов).\n\n' +
+    'Пример: «грустная песня про осень в стиле инди-рок, эмоциональный женский вокал»\n\n' +
+    `💰 Будет списано ${MUSIC_COST.simple} 🍌 после запуска.`
+  );
+});
+
+bot.action('music_instrumental', (ctx) => {
+  if (!ctx.user) return;
+  const userId = maxCtxUserId(ctx);
+  const user = db_helper.getUser(userId);
+  if (!user) return;
+  if (!isAdmin(userId) && user.balance < MUSIC_COST.instrumental) {
+    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${MUSIC_COST.instrumental} 🍌).`);
+  }
+  db_helper.updateVideoSetting(userId, 'music_state', 'awaiting_instrumental_prompt');
+  saveMusicDraft(userId, {});
+  return ctx.reply(
+    '🥁 Только инструментал\n\n' +
+    'Опиши музыку одним сообщением (до 500 символов).\n\n' +
+    'Пример: «лофи-бит для учёбы, спокойный темп, фортепиано и мягкие ударные»\n\n' +
+    `💰 Будет списано ${MUSIC_COST.instrumental} 🍌 после запуска.`
+  );
+});
+
+bot.action('music_custom', (ctx) => {
+  if (!ctx.user) return;
+  const userId = maxCtxUserId(ctx);
+  const user = db_helper.getUser(userId);
+  if (!user) return;
+  if (!isAdmin(userId) && user.balance < MUSIC_COST.custom) {
+    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${MUSIC_COST.custom} 🍌).`);
+  }
+  db_helper.updateVideoSetting(userId, 'music_state', 'awaiting_custom_prompt');
+  saveMusicDraft(userId, {});
+  return ctx.reply(getMusicCustomStepPrompt('awaiting_custom_prompt', {}));
+});
+
+bot.action(/^music_custom_vocal_(m|f|auto)$/, async (ctx) => {
+  if (!ctx.user || !ctx.match) return;
+  const userId = maxCtxUserId(ctx);
+  const user = db_helper.getUser(userId);
+  if (!user) return;
+  const choice = ctx.match[1];
+  const draft = parseMusicDraft(user);
+  if (choice === 'm' || choice === 'f') {
+    draft.vocalGender = choice;
+  } else {
+    delete draft.vocalGender;
+  }
+  saveMusicDraft(userId, draft);
+  // Запускаем генерацию custom
+  await runMusicGeneration(ctx, userId, 'custom');
+});
+
+bot.action('music_cancel', (ctx) => {
+  if (!ctx.user) return;
+  const userId = maxCtxUserId(ctx);
+  clearMusicDraft(userId);
+  const user = db_helper.getUser(userId);
+  if (!user) return;
+  return ctx.editMessage({
+    text: getMusicMenuText(user),
+    attachments: [getMusicMenuKeyboard()]
+  });
+});
+
 // Dynamic settings handlers
 bot.action(/^set_mode_(.+)$/, (ctx) => {
   const p = ctx.callback?.payload;
@@ -2479,6 +2830,8 @@ const resetMainMenuUserState = (userId: string) => {
   db_helper.updateVideoSetting(userId, 'photo_menu_message_id', null);
   db_helper.updateVideoSetting(userId, 'seedance_state', 'idle');
   db_helper.updateVideoSetting(userId, 'seedance_last_frame_url', null);
+  db_helper.updateVideoSetting(userId, 'music_state', 'idle');
+  db_helper.updateVideoSetting(userId, 'music_draft_json', '{}');
   clearPhotoKieSelection(userId);
 };
 

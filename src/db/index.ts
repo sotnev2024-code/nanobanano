@@ -57,6 +57,22 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS music_generations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT,
+    mode TEXT,
+    status TEXT,
+    task_id TEXT,
+    prompt TEXT,
+    style TEXT,
+    title TEXT,
+    instrumental INTEGER DEFAULT 0,
+    custom_mode INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     level TEXT NOT NULL,
@@ -97,7 +113,9 @@ const columns = [
   { name: 'video_gen_json', type: "TEXT DEFAULT '{}'" },
   { name: 'is_banned', type: 'INTEGER DEFAULT 0' },
   { name: 'seedance_state', type: "TEXT DEFAULT 'idle'" },
-  { name: 'seedance_last_frame_url', type: 'TEXT' }
+  { name: 'seedance_last_frame_url', type: 'TEXT' },
+  { name: 'music_state', type: "TEXT DEFAULT 'idle'" },
+  { name: 'music_draft_json', type: "TEXT DEFAULT '{}'" }
 ];
 
 const generationColumns = [
@@ -148,6 +166,8 @@ export interface User {
   is_banned: number; // 0 or 1
   seedance_state: string; // 'idle' | 'awaiting_last_frame'
   seedance_last_frame_url: string | null;
+  music_state: string; // 'idle' | 'awaiting_simple_prompt' | 'awaiting_custom_prompt' | 'awaiting_custom_style' | 'awaiting_custom_title' | 'awaiting_instrumental_prompt'
+  music_draft_json: string; // JSON: { prompt?: string; style?: string; title?: string; vocalGender?: 'm'|'f' }
   created_at: string;
 }
 
@@ -183,7 +203,7 @@ export const db_helper = {
     stmt.run(balance, userId);
   },
 
-  updateVideoSetting: (userId: string, key: 'video_mode' | 'video_model' | 'video_ratio' | 'video_duration' | 'is_awaiting_prompt' | 'is_awaiting_media' | 'stored_image_url' | 'stored_video_url' | 'last_task_id' | 'is_admin_adding_bananas' | 'is_admin_broadcasting' | 'photo_references' | 'photo_state' | 'motion_state' | 'motion_quality' | 'photo_prompt_state' | 'grok_mode' | 'photo_prompt_upload_count' | 'photo_prompt_menu_message_id' | 'photo_menu_message_id' | 'photo_kie_model' | 'photo_gen_json' | 'video_gen_json' | 'seedance_state' | 'seedance_last_frame_url', value: string | number | null): void => {
+  updateVideoSetting: (userId: string, key: 'video_mode' | 'video_model' | 'video_ratio' | 'video_duration' | 'is_awaiting_prompt' | 'is_awaiting_media' | 'stored_image_url' | 'stored_video_url' | 'last_task_id' | 'is_admin_adding_bananas' | 'is_admin_broadcasting' | 'photo_references' | 'photo_state' | 'motion_state' | 'motion_quality' | 'photo_prompt_state' | 'grok_mode' | 'photo_prompt_upload_count' | 'photo_prompt_menu_message_id' | 'photo_menu_message_id' | 'photo_kie_model' | 'photo_gen_json' | 'video_gen_json' | 'seedance_state' | 'seedance_last_frame_url' | 'music_state' | 'music_draft_json', value: string | number | null): void => {
     const stmt = db.prepare(`UPDATE users SET ${key} = ? WHERE id = ?`);
     stmt.run(value, userId);
   },
@@ -196,6 +216,33 @@ export const db_helper = {
   logPhotoGeneration: (userId: string, model: string, status: string, taskId: string, prompt?: string): void => {
     const stmt = db.prepare('INSERT INTO photo_generations (user_id, model, status, task_id, prompt) VALUES (?, ?, ?, ?, ?)');
     stmt.run(userId, model, status, taskId, prompt ?? null);
+  },
+
+  logMusicGeneration: (
+    userId: string,
+    mode: string,
+    status: string,
+    taskId: string,
+    fields: { prompt?: string; style?: string; title?: string; instrumental?: boolean; customMode?: boolean }
+  ): void => {
+    const stmt = db.prepare(
+      'INSERT INTO music_generations (user_id, mode, status, task_id, prompt, style, title, instrumental, custom_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    stmt.run(
+      userId,
+      mode,
+      status,
+      taskId,
+      fields.prompt ?? null,
+      fields.style ?? null,
+      fields.title ?? null,
+      fields.instrumental ? 1 : 0,
+      fields.customMode ? 1 : 0
+    );
+  },
+
+  updateMusicGenerationStatus: (taskId: string, status: string): void => {
+    db.prepare('UPDATE music_generations SET status = ? WHERE task_id = ?').run(status, taskId);
   },
 
   banUser: (userId: string): void => {
