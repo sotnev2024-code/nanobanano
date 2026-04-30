@@ -16,12 +16,19 @@ export function persistPhotoMenuMessageId(ctx: { messageId?: string; message?: u
   }
 }
 
-export type PhotoKieModelId = 'seedream_5_lite' | 'seedream_45_edit' | 'nano_banana_pro' | 'nano_banana_2';
+export type PhotoKieModelId =
+  | 'seedream_5_lite'
+  | 'seedream_45_edit'
+  | 'nano_banana_pro'
+  | 'nano_banana_2'
+  | 'gpt_image_2_t2i'
+  | 'gpt_image_2_i2i';
 
-/** 4K в UI: Seedream `high`, Nano `4K` в API Kie */
+/** 4K в UI: Seedream `high`, Nano `4K` в API Kie, GPT Image — `4K` (resolution-режим) */
 function photo4kExtraBananas(modelId: PhotoKieModelId): number {
   if (modelId === 'seedream_5_lite' || modelId === 'seedream_45_edit') return 0;
   if (modelId === 'nano_banana_2') return 3;
+  if (modelId === 'gpt_image_2_t2i' || modelId === 'gpt_image_2_i2i') return 5;
   return 2;
 }
 
@@ -37,21 +44,27 @@ export const PHOTO_MODEL_ORDER: PhotoKieModelId[] = [
   'seedream_5_lite',
   'seedream_45_edit',
   'nano_banana_pro',
-  'nano_banana_2'
+  'nano_banana_2',
+  'gpt_image_2_t2i',
+  'gpt_image_2_i2i'
 ];
 
 export const PHOTO_MODEL_CALLBACK_SUFFIX: Record<PhotoKieModelId, string> = {
   seedream_5_lite: 's5',
   seedream_45_edit: 's45',
   nano_banana_pro: 'nbp',
-  nano_banana_2: 'nb2'
+  nano_banana_2: 'nb2',
+  gpt_image_2_t2i: 'gi2t',
+  gpt_image_2_i2i: 'gi2i'
 };
 
 export const PHOTO_CALLBACK_TO_MODEL: Record<string, PhotoKieModelId> = {
   s5: 'seedream_5_lite',
   s45: 'seedream_45_edit',
   nbp: 'nano_banana_pro',
-  nb2: 'nano_banana_2'
+  nb2: 'nano_banana_2',
+  gi2t: 'gpt_image_2_t2i',
+  gi2i: 'gpt_image_2_i2i'
 };
 
 export const PHOTO_MODEL_META: Record<
@@ -96,6 +109,22 @@ export const PHOTO_MODEL_META: Record<
     cost: 7,
     needsImageUrls: false,
     emoji: '⚡'
+  },
+  gpt_image_2_t2i: {
+    kieModel: 'gpt-image-2-text-to-image',
+    label: 'GPT Image 2 (Text→Image)',
+    shortLabel: 'GPT Image 2',
+    cost: 5,
+    needsImageUrls: false,
+    emoji: '🤖'
+  },
+  gpt_image_2_i2i: {
+    kieModel: 'gpt-image-2-image-to-image',
+    label: 'GPT Image 2 (Image→Image)',
+    shortLabel: 'GPT Image i2i',
+    cost: 6,
+    needsImageUrls: true,
+    emoji: '🪄'
   }
 };
 
@@ -361,6 +390,43 @@ export async function buildPhotoCreateTaskParams(
     };
     if (kieUrls.length) input.image_input = kieUrls;
     return { model: meta.kieModel, input };
+  }
+
+  // ── GPT Image 2 (text→image / image→image) ─────────────────────────────
+  // 1K — auto only, 2K — все aspect (1:1 capped at 2K), 4K — non-1:1 only.
+  // У нас UI: 2K/4K. Маппим в API: '2K' / '4K'. При 1:1 + 4K — KIE откажет, уважим: показываем 2K.
+  if (mid === 'gpt_image_2_t2i' || mid === 'gpt_image_2_i2i') {
+    const wants4K = getPhotoOutputQuality(prefs) === '4k';
+    const isSquare = aspect === '1:1';
+    const gptResolution = wants4K && !isSquare ? '4K' : '2K';
+    // GPT Image 2 не поддерживает 3:2 (только 1:1, 9:16, 16:9, 4:3, 3:4)
+    const gptAspectAllowed = ['1:1', '9:16', '16:9', '4:3', '3:4'];
+    const gptAspect = gptAspectAllowed.includes(aspect) ? aspect : 'auto';
+
+    if (mid === 'gpt_image_2_i2i') {
+      const kieUrls = await uploadPhotoRefsForKie(rawRefUrls, 5);
+      if (kieUrls.length === 0) {
+        throw new Error('NO_REFS_FOR_GPT_IMAGE_I2I');
+      }
+      return {
+        model: meta.kieModel,
+        input: {
+          prompt,
+          input_urls: kieUrls,
+          aspect_ratio: gptAspect,
+          resolution: gptResolution
+        }
+      };
+    }
+
+    return {
+      model: meta.kieModel,
+      input: {
+        prompt,
+        aspect_ratio: gptAspect,
+        resolution: gptResolution
+      }
+    };
   }
 
   const kieUrls = rawRefUrls.length ? await uploadPhotoRefsForKie(rawRefUrls, 14) : [];

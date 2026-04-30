@@ -754,6 +754,13 @@ bot.on('message_created', async (ctx, next) => {
       return;
     }
 
+    if (modelId === 'gpt_image_2_i2i' && refs.length === 0) {
+      await ctx.reply(
+        '❌ Для GPT Image 2 (Image→Image) нужна минимум одна фотография. Загрузите референсы или выберите Text→Image.'
+      );
+      return;
+    }
+
     try {
       await ctx.reply('⏳ Начинаю генерацию фото... Это может занять несколько минут.');
 
@@ -780,6 +787,10 @@ bot.on('message_created', async (ctx, next) => {
     } catch (error: any) {
       if (error?.message === 'NO_REFS_FOR_SEEDREAM_EDIT') {
         await ctx.reply('❌ Не удалось подготовить изображения для Seedream 4.5. Добавьте референсы и попробуйте снова.');
+        return;
+      }
+      if (error?.message === 'NO_REFS_FOR_GPT_IMAGE_I2I') {
+        await ctx.reply('❌ Не удалось подготовить изображения для GPT Image 2 (Image→Image). Добавьте референсы и попробуйте снова.');
         return;
       }
       logger.error('photo_gen', 'Photo generation error', error);
@@ -1548,7 +1559,7 @@ bot.action('photo_continue_to_prompt', (ctx) => {
   });
 });
 
-bot.action(/^photo_pick_(s5|s45|nbp|nb2)$/, (ctx) => {
+bot.action(/^photo_pick_(s5|s45|nbp|nb2|gi2t|gi2i)$/, (ctx) => {
   if (!ctx.user || !ctx.match) return;
   const userId = maxCtxUserId(ctx);
   const suf = ctx.match[1];
