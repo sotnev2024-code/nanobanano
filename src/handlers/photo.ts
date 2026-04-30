@@ -147,10 +147,23 @@ export function getPhotoOutputQuality(prefs: PhotoGenPrefs): PhotoOutputQuality 
   return prefs.output_quality === '4k' ? '4k' : '2k';
 }
 
-/** Списание 🍌: база модели; 4K — без доплаты (Seedream), +2 (Nano Pro), +3 (Nano 2). */
-export function getPhotoGenerationBananaCost(modelId: PhotoKieModelId, prefs: PhotoGenPrefs): number {
+/**
+ * Списание 🍌: база модели; 4K — без доплаты (Seedream), +2 (Nano Pro), +3 (Nano 2),
+ * +5 (GPT Image 2 при non-square 4K). Для GPT Image 2 при наличии референсов — +1🍌
+ * (i2i дороже t2i на стороне KIE).
+ */
+export function getPhotoGenerationBananaCost(
+  modelId: PhotoKieModelId,
+  prefs: PhotoGenPrefs,
+  opts?: { hasRefs?: boolean }
+): number {
   const base = PHOTO_MODEL_META[modelId].cost;
-  return getPhotoOutputQuality(prefs) === '4k' ? base + photo4kExtraBananas(modelId) : base;
+  let total =
+    getPhotoOutputQuality(prefs) === '4k' ? base + photo4kExtraBananas(modelId) : base;
+  if (modelId === 'gpt_image_2_t2i' && opts?.hasRefs) {
+    total += 1; // GPT Image 2: i2i на 1🍌 дороже t2i
+  }
+  return total;
 }
 
 function aspectKeyFromRatio(ratio: string): string {
@@ -174,10 +187,11 @@ function qualityButtonLabel(
   tier: PhotoOutputQuality,
   current: PhotoOutputQuality,
   modelId: PhotoKieModelId,
-  prefs: PhotoGenPrefs
+  prefs: PhotoGenPrefs,
+  hasRefs: boolean
 ): string {
   const mark = current === tier ? '✅ ' : '';
-  const bananas = getPhotoGenerationBananaCost(modelId, { ...prefs, output_quality: tier });
+  const bananas = getPhotoGenerationBananaCost(modelId, { ...prefs, output_quality: tier }, { hasRefs });
   const label = tier === '2k' ? '2K' : '4K';
   return `${mark}${label} (${bananas}🍌)`;
 }
@@ -212,13 +226,20 @@ export const getPhotoMenuText = (user: User) => {
     const mid = (user.photo_kie_model as PhotoKieModelId | null) || 'seedream_5_lite';
     const meta = PHOTO_MODEL_META[mid] ? PHOTO_MODEL_META[mid] : PHOTO_MODEL_META.seedream_5_lite;
     const p = parsePhotoGenPrefs(user);
-    const pay = getPhotoGenerationBananaCost(mid, p);
+    const hasRefs = refCount > 0;
+    const pay = getPhotoGenerationBananaCost(mid, p, { hasRefs });
     const qLabel = getPhotoOutputQuality(p) === '4k' ? '4K' : '2K';
     const noteS5 =
-      mid === 'seedream_5_lite' && refCount > 0
+      mid === 'seedream_5_lite' && hasRefs
         ? '\n\n📎 Seedream 5.0: референсы будут использованы (Image-to-Image)'
         : '';
     const noteS45 = mid === 'seedream_45_edit' ? '\n\n📎 Seedream 4.5: нужна минимум 1 фотография.' : '';
+    const noteGpt =
+      mid === 'gpt_image_2_t2i'
+        ? hasRefs
+          ? '\n\n📎 GPT Image 2: используется Image→Image (на основе ваших референсов, +1🍌 к стоимости)'
+          : '\n\n📎 GPT Image 2: только текст. Чтобы использовать референсы — загрузите фото на шаге 1.'
+        : '';
 
     return `🖼️ Создание фото
 
@@ -227,7 +248,7 @@ export const getPhotoMenuText = (user: User) => {
 🎯 Качество: ${qLabel} → к списанию ${pay}🍌
 🍌 Баланс: ${user.balance}
 
-Введите промпт для генерации:${noteS5}${noteS45}`;
+Введите промпт для генерации:${noteS5}${noteS45}${noteGpt}`;
   }
 
   return `🖼️ Создание фото
@@ -249,6 +270,8 @@ export const getPhotoMenuKeyboard = (user: User) => {
   if (user.photo_state === 'awaiting_photo_model') {
     const selected = (user.photo_kie_model as PhotoKieModelId | null) || 'seedream_5_lite';
     const p = parsePhotoGenPrefs(user);
+    const refsForCost = JSON.parse(user.photo_references || '[]');
+    const hasRefs = refsForCost.length > 0;
 
     const modelRows: ReturnType<typeof Keyboard.button.callback>[][] = [];
     for (const id of PHOTO_MODEL_ORDER) {
@@ -265,8 +288,8 @@ export const getPhotoMenuKeyboard = (user: User) => {
 
     const q = getPhotoOutputQuality(p);
     const qualRow = [
-      Keyboard.button.callback(qualityButtonLabel('2k', q, selected, p), 'photo_qual_2k'),
-      Keyboard.button.callback(qualityButtonLabel('4k', q, selected, p), 'photo_qual_4k')
+      Keyboard.button.callback(qualityButtonLabel('2k', q, selected, p, hasRefs), 'photo_qual_2k'),
+      Keyboard.button.callback(qualityButtonLabel('4k', q, selected, p, hasRefs), 'photo_qual_4k')
     ];
 
     return Keyboard.inlineKeyboard([
@@ -380,19 +403,34 @@ export async function buildPhotoCreateTaskParams(
     return { model: meta.kieModel, input };
   }
 
-  // ── GPT Image 2 (text→image) ──────────────────────────────────────────
+  // ── GPT Image 2: универсальная (text→image / image→image) ─────────────
+  // Если есть референсы — используем gpt-image-2-image-to-image и шлём input_urls.
+  // Если нет — gpt-image-2-text-to-image с одним только промптом.
   // 1K — auto only, 2K — все aspect (1:1 capped at 2K), 4K — non-1:1 only.
   // У нас UI: 2K/4K. При 1:1 + 4K — KIE откажет, уважим: показываем 2K.
   if (mid === 'gpt_image_2_t2i') {
     const wants4K = getPhotoOutputQuality(prefs) === '4k';
     const isSquare = aspect === '1:1';
     const gptResolution = wants4K && !isSquare ? '4K' : '2K';
-    // GPT Image 2 не поддерживает 3:2 (только 1:1, 9:16, 16:9, 4:3, 3:4)
     const gptAspectAllowed = ['1:1', '9:16', '16:9', '4:3', '3:4'];
     const gptAspect = gptAspectAllowed.includes(aspect) ? aspect : 'auto';
 
+    const hasRefs = rawRefUrls.length > 0;
+    if (hasRefs) {
+      const kieUrls = await uploadPhotoRefsForKie(rawRefUrls, 5);
+      return {
+        model: 'gpt-image-2-image-to-image',
+        input: {
+          prompt,
+          input_urls: kieUrls,
+          aspect_ratio: gptAspect,
+          resolution: gptResolution
+        }
+      };
+    }
+
     return {
-      model: meta.kieModel,
+      model: 'gpt-image-2-text-to-image',
       input: {
         prompt,
         aspect_ratio: gptAspect,

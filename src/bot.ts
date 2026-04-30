@@ -1007,7 +1007,7 @@ bot.on('message_created', async (ctx, next) => {
     }
 
     const prefs = parsePhotoGenPrefs(user);
-    const cost = getPhotoGenerationBananaCost(modelId, prefs);
+    const cost = getPhotoGenerationBananaCost(modelId, prefs, { hasRefs: refs.length > 0 });
     const meta = PHOTO_MODEL_META[modelId];
 
     if (!isAdmin(userId) && user.balance < cost) {
