@@ -95,7 +95,9 @@ const columns = [
   { name: 'photo_kie_model', type: 'TEXT' },
   { name: 'photo_gen_json', type: "TEXT DEFAULT '{}'" },
   { name: 'video_gen_json', type: "TEXT DEFAULT '{}'" },
-  { name: 'is_banned', type: 'INTEGER DEFAULT 0' }
+  { name: 'is_banned', type: 'INTEGER DEFAULT 0' },
+  { name: 'seedance_state', type: "TEXT DEFAULT 'idle'" },
+  { name: 'seedance_last_frame_url', type: 'TEXT' }
 ];
 
 const generationColumns = [
@@ -144,6 +146,8 @@ export interface User {
   photo_gen_json: string | null;
   video_gen_json: string | null;
   is_banned: number; // 0 or 1
+  seedance_state: string; // 'idle' | 'awaiting_last_frame'
+  seedance_last_frame_url: string | null;
   created_at: string;
 }
 
@@ -179,7 +183,7 @@ export const db_helper = {
     stmt.run(balance, userId);
   },
 
-  updateVideoSetting: (userId: string, key: 'video_mode' | 'video_model' | 'video_ratio' | 'video_duration' | 'is_awaiting_prompt' | 'is_awaiting_media' | 'stored_image_url' | 'stored_video_url' | 'last_task_id' | 'is_admin_adding_bananas' | 'is_admin_broadcasting' | 'photo_references' | 'photo_state' | 'motion_state' | 'motion_quality' | 'photo_prompt_state' | 'grok_mode' | 'photo_prompt_upload_count' | 'photo_prompt_menu_message_id' | 'photo_menu_message_id' | 'photo_kie_model' | 'photo_gen_json' | 'video_gen_json', value: string | number | null): void => {
+  updateVideoSetting: (userId: string, key: 'video_mode' | 'video_model' | 'video_ratio' | 'video_duration' | 'is_awaiting_prompt' | 'is_awaiting_media' | 'stored_image_url' | 'stored_video_url' | 'last_task_id' | 'is_admin_adding_bananas' | 'is_admin_broadcasting' | 'photo_references' | 'photo_state' | 'motion_state' | 'motion_quality' | 'photo_prompt_state' | 'grok_mode' | 'photo_prompt_upload_count' | 'photo_prompt_menu_message_id' | 'photo_menu_message_id' | 'photo_kie_model' | 'photo_gen_json' | 'video_gen_json' | 'seedance_state' | 'seedance_last_frame_url', value: string | number | null): void => {
     const stmt = db.prepare(`UPDATE users SET ${key} = ? WHERE id = ?`);
     stmt.run(value, userId);
   },

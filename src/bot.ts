@@ -617,6 +617,23 @@ bot.on('message_created', async (ctx, next) => {
     return;
   }
 
+  // Handle Seedance 2.0: загрузка last frame
+  if (user.seedance_state === 'awaiting_last_frame') {
+    const attachments = ctx.message.body.attachments || [];
+    const images = attachments.filter((a: { type: string }) => a.type === 'image');
+    if (images.length > 0) {
+      const lastFrameUrl = sanitizeUrl((images[0] as any).payload.url);
+      db_helper.updateVideoSetting(userId, 'seedance_last_frame_url', lastFrameUrl);
+      db_helper.updateVideoSetting(userId, 'seedance_state', 'idle');
+      await ctx.reply(
+        '✅ Last frame загружен!\n\n' +
+        'Теперь вернитесь в меню «Создать видео» и продолжите как обычно — финальный кадр будет использован.\n\n' +
+        '🗑 Чтобы убрать last frame — нажмите соответствующую кнопку в меню видео.'
+      );
+      return;
+    }
+  }
+
   // Handle Photo=Prompt: Uploading photo for analysis
   if (user.photo_prompt_state === 'awaiting_photo') {
     const attachments = ctx.message.body.attachments || [];
@@ -1104,7 +1121,12 @@ bot.on('message_created', async (ctx, next) => {
     // Reset awaiting status and stored media after task creation
     db_helper.updateVideoSetting(userId, 'is_awaiting_prompt', 0);
 
-    const videoCost = getVideoCost(user.video_model, user.video_duration);
+    const seed2Prefs = user.video_model === 'seedance_2' ? parseVideoGenPrefs(user) : null;
+    const seed2HasLastFrame = user.video_model === 'seedance_2' && !!user.seedance_last_frame_url;
+    const videoCost = getVideoCost(user.video_model, user.video_duration, {
+      resolution: seed2Prefs?.seedance2_resolution,
+      lastFrame: seed2HasLastFrame
+    });
     if (!isAdmin(userId) && user.balance < videoCost) {
       return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${videoCost} 🍌).`);
     }
@@ -1186,7 +1208,7 @@ bot.on('message_created', async (ctx, next) => {
         }
       } else if (kieModel === 'bytedance/seedance-2') {
         const vp = parseVideoGenPrefs(user);
-        input.resolution = '720p';
+        input.resolution = vp.seedance2_resolution;
         if (!input.duration) input.duration = 8;
         input.generate_audio = vp.seedance2_generate_audio;
         input.return_last_frame = false;
@@ -1199,6 +1221,15 @@ bot.on('message_created', async (ctx, next) => {
             `seed2-first-${userId}-${Date.now()}.jpg`
           );
           input.first_frame_url = first;
+
+          // Last frame — если загружен, передаём как last_frame_url для морфинга
+          if (user.seedance_last_frame_url) {
+            const last = await uploadMediaUrlForKie(
+              sanitizeUrl(user.seedance_last_frame_url),
+              `seed2-last-${userId}-${Date.now()}.jpg`
+            );
+            input.last_frame_url = last;
+          }
         } else if (user.video_mode === 'video_to_video' && user.stored_video_url) {
           const refVid = await uploadMediaUrlForKie(
             sanitizeUrl(user.stored_video_url),
@@ -1258,6 +1289,8 @@ bot.on('message_created', async (ctx, next) => {
         // Clear stored media for next task
         db_helper.updateVideoSetting(userId, 'stored_image_url', null);
         db_helper.updateVideoSetting(userId, 'stored_video_url', null);
+        db_helper.updateVideoSetting(userId, 'seedance_last_frame_url', null);
+        db_helper.updateVideoSetting(userId, 'seedance_state', 'idle');
         // Start polling in background
         pollTaskStatus(ctx, taskId, userId, user.video_model, videoCost);
       } else {
@@ -2396,6 +2429,43 @@ bot.action(/^set_seed2_audio_(0|1)$/, (ctx) => {
   });
 });
 
+bot.action(/^set_seed2_res_(480p|720p|1080p)$/, (ctx) => {
+  if (!ctx.user || !ctx.match) return;
+  const res = ctx.match[1] as '480p' | '720p' | '1080p';
+  const userId = maxCtxUserId(ctx);
+  patchSeed2Prefs(userId, { seedance2_resolution: res });
+  const user = db_helper.getUser(userId);
+  if (!user) return;
+  return ctx.editMessage({
+    text: getVideoMenuText(user),
+    attachments: [getVideoMenuKeyboard(user)]
+  });
+});
+
+bot.action('seed2_lastframe_add', async (ctx) => {
+  if (!ctx.user) return;
+  const userId = maxCtxUserId(ctx);
+  db_helper.updateVideoSetting(userId, 'seedance_state', 'awaiting_last_frame');
+  return ctx.reply(
+    '🔚 Загрузка последнего кадра для Seedance 2.0\n\n' +
+    'Отправьте одно фото в чат — оно станет финальным кадром видео-перехода.\n\n' +
+    '+5 🍌 к стоимости. Чтобы отменить — нажмите «🗑 Убрать last frame» в меню видео.'
+  );
+});
+
+bot.action('seed2_lastframe_clear', (ctx) => {
+  if (!ctx.user) return;
+  const userId = maxCtxUserId(ctx);
+  db_helper.updateVideoSetting(userId, 'seedance_last_frame_url', null);
+  db_helper.updateVideoSetting(userId, 'seedance_state', 'idle');
+  const user = db_helper.getUser(userId);
+  if (!user) return;
+  return ctx.editMessage({
+    text: getVideoMenuText(user),
+    attachments: [getVideoMenuKeyboard(user)]
+  });
+});
+
 const resetMainMenuUserState = (userId: string) => {
   db_helper.updateVideoSetting(userId, 'is_awaiting_prompt', 0);
   db_helper.updateVideoSetting(userId, 'stored_image_url', null);
@@ -2407,6 +2477,8 @@ const resetMainMenuUserState = (userId: string) => {
   db_helper.updateVideoSetting(userId, 'photo_prompt_upload_count', 0);
   db_helper.updateVideoSetting(userId, 'photo_prompt_menu_message_id', null);
   db_helper.updateVideoSetting(userId, 'photo_menu_message_id', null);
+  db_helper.updateVideoSetting(userId, 'seedance_state', 'idle');
+  db_helper.updateVideoSetting(userId, 'seedance_last_frame_url', null);
   clearPhotoKieSelection(userId);
 };
 
