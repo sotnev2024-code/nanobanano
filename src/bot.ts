@@ -46,7 +46,7 @@ import {
   type MusicMode
 } from './handlers/music';
 import { kie_api, uploadMediaUrlForKie } from './utils/kie_api';
-import { suno_api, isSunoCompleted, isSunoFailed, type SunoTrack } from './utils/suno_api';
+import { suno_api, isSunoCompleted, isSunoFailed, isSunoFirstSuccess, type SunoTrack } from './utils/suno_api';
 import { tbank, PACKS } from './utils/tbank';
 import { logger } from './utils/logger';
 import { probeIncomingVideoDuration, tryDurationFromMediaUrl } from './utils/video_duration';
@@ -579,11 +579,30 @@ const pollMusicTaskStatus = async (ctx: any, taskId: string, userId: string, mod
   const refundMusic = () => { if (actualCost > 0) db_helper.updateBalance(userId, actualCost); };
 
   let attempts = 0;
+  let firstSuccessAnnounced = false;
   const maxAttempts = KIE_POLL_MAX_ATTEMPTS;
   while (attempts < maxAttempts) {
     try {
       const info = await suno_api.getRecordInfo(taskId);
+      if (info.code !== 200 || !info.data) {
+        logger.warn('polling', 'music record-info skipped', { taskId, code: info.code, msg: info.msg });
+        attempts++;
+        await sleep(KIE_POLL_INTERVAL_MS);
+        continue;
+      }
       const data = info.data;
+
+      if (isSunoFirstSuccess(data) && !firstSuccessAnnounced) {
+        firstSuccessAnnounced = true;
+        try {
+          await ctx.reply(
+            '🎵 Suno отдал первый вариант из двух — дожидаюсь второй дорожки (обычно до 1–2 мин). ' +
+              'Финальные ссылки пришлю, когда оба трека будут готовы.'
+          );
+        } catch (e) {
+          logger.warn('polling', 'music first-success notice failed', e);
+        }
+      }
 
       if (isSunoCompleted(data)) {
         const tracks = data?.response?.sunoData || [];

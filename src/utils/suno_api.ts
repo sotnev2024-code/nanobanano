@@ -113,26 +113,56 @@ export const suno_api = {
   },
 };
 
-/** Successful state — все треки готовы (на стороне Suno). */
+function normStatus(data: SunoRecordInfoResponse['data']): string {
+  return (data?.status || '').trim().toUpperCase();
+}
+
+/** Успех: все варианты дорожек готовы (см. KIE record-info). */
 export function isSunoCompleted(data: SunoRecordInfoResponse['data']): boolean {
-  if (!data) return false;
-  const s = (data.status || '').toUpperCase();
+  const s = normStatus(data);
   return s === 'SUCCESS' || s === 'COMPLETE';
 }
 
-/** Failed state — больше не пытаемся поллить. */
+/** Первый вариант уже в sunoData, второй ещё генерируется — не финал. */
+export function isSunoFirstSuccess(data: SunoRecordInfoResponse['data']): boolean {
+  return normStatus(data) === 'FIRST_SUCCESS';
+}
+
+const SUNO_STILL_POLLING = new Set([
+  '',
+  'PENDING',
+  'TEXT_SUCCESS',
+  'FIRST_SUCCESS',
+]);
+
+const SUNO_TERMINAL_FAIL = new Set([
+  'SENSITIVE_WORD_ERROR',
+  'CREATE_TASK_FAILED',
+  'GENERATE_AUDIO_FAILED',
+  'CALLBACK_EXCEPTION',
+]);
+
+/**
+ * Терминальный сбой: явный список + эвристика по подстрокам.
+ * Промежуточные TEXT_SUCCESS / FIRST_SUCCESS не считаем ошибкой (есть в SUNO_STILL_POLLING).
+ * Для произвольных статусов с FAIL/ERROR, но со словом SUCCESS (например *_SUCCESS), не отрезаем — оставляем поллинг.
+ */
 export function isSunoFailed(data: SunoRecordInfoResponse['data']): { failed: true; reason: string } | { failed: false } {
   if (!data) return { failed: false };
-  const s = (data.status || '').toUpperCase();
-  if (
-    s.includes('FAIL') ||
-    s.includes('ERROR') ||
-    s === 'SENSITIVE_WORD_ERROR'
-  ) {
+  const s = normStatus(data);
+  if (SUNO_STILL_POLLING.has(s) || isSunoCompleted(data)) return { failed: false };
+  if (SUNO_TERMINAL_FAIL.has(s)) {
     return {
       failed: true,
       reason: data.errorMessage || data.status || 'unknown',
     };
   }
+  if ((s.includes('FAIL') || s.includes('ERROR')) && !s.includes('SUCCESS')) {
+    return {
+      failed: true,
+      reason: data.errorMessage || data.status || 'unknown',
+    };
+  }
+  logger.warn('suno', 'Unknown Suno status, continue polling', { status: data.status, taskId: data.taskId });
   return { failed: false };
 }
