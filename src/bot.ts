@@ -36,10 +36,16 @@ import {
   getAdminPanelKeyboard,
   getPricesMenuText,
   getPricesMenuKeyboard,
-  getPriceGroupText,
-  getPriceGroupKeyboard,
+  getCategoryText,
+  getCategoryKeyboard,
+  getModelText,
+  getModelKeyboard,
+  getSettingText,
+  getSettingKeyboard,
   getPacksAdminText,
-  getPacksAdminKeyboard
+  getPacksAdminKeyboard,
+  getPackText,
+  getPackKeyboard
 } from './handlers/admin';
 import { getBillingMenuText, getBillingMenuKeyboard } from './handlers/billing';
 import {
@@ -58,16 +64,14 @@ import { kie_api, uploadMediaUrlForKie } from './utils/kie_api';
 import { suno_api, isSunoCompleted, isSunoFailed, isSunoFirstSuccess, type SunoTrack } from './utils/suno_api';
 import { tbank } from './utils/tbank';
 import {
-  PRICE_FIELDS,
-  PRICE_GROUP_LABEL,
   getPrice,
   setPrice,
-  getPriceField,
-  priceFieldsByGroup,
+  getCategory,
+  getModel,
+  getSetting,
   getPacks,
   setPack,
-  packLabel,
-  type PriceGroup
+  packLabel
 } from './utils/pricing';
 import { logger } from './utils/logger';
 import { probeIncomingVideoDuration, tryDurationFromMediaUrl } from './utils/video_duration';
@@ -77,46 +81,6 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-// ─── Контент-фильтр ─────────────────────────────────────────────────────────
-const BANNED_WORDS: string[] = [
-  // Сексуальный контент
-  'porn', 'porno', 'pornography', 'xxx', 'nsfw', 'nude', 'naked', 'nudity',
-  'erotic', 'hentai', 'explicit sex', 'sex scene', 'genitalia', 'genitals',
-  'penis', 'vagina', 'breasts naked', 'topless', 'bottomless', 'undress',
-  'masturbat', 'orgasm', 'ejaculat', 'cum shot',
-  // Детский контент
-  'child porn', 'cp ', ' cp ', 'csam', 'lolita', 'underage sex', 'minor naked',
-  'minor nude', 'teen naked', 'teen nude', 'child nude', 'child naked',
-  'preteen', 'pre-teen', 'pedophil', 'paedophil',
-  // Насилие
-  'gore', 'snuff', 'necrophil', 'torture porn', 'extreme violence',
-  // Русские вариации
-  'порно', 'секс видео', 'детское порно', 'голые дети', 'голый ребёнок',
-  'педофил', 'инцест', 'раздеть ребён', 'несовершеннолетн',
-  // Русский NSFW (взрослый контент)
-  'голая', 'голый', 'голую', 'голым', 'голой', 'голых',
-  'обнажённ', 'обнаженн', 'раздет',
-  'сиськ', 'сиси', 'сисек', 'сисик',
-  'сосок', 'соски', 'сосков',
-  'трусик', 'без трусов', 'без белья', 'без одежды',
-  'минет', 'оральн', 'аналь',
-  'сперм', 'мастурб', 'оргазм',
-  'член ', 'хуй', 'вагин', 'влагалищ', 'писька', 'писка',
-  'эроти', 'порнограф',
-];
-
-/**
- * Проверяет промпт на запрещённые слова/фразы.
- * Возвращает найденное слово или null если всё чисто.
- */
-function checkBannedContent(text: string): string | null {
-  const lower = text.toLowerCase();
-  for (const word of BANNED_WORDS) {
-    if (lower.includes(word.toLowerCase())) return word;
-  }
-  return null;
-}
 
 /** Ожидают одно видео после /probe_video (тест длительности) */
 const videoProbePendingUserIds = new Set<string>();
@@ -734,26 +698,6 @@ bot.on('message_created', async (ctx, next) => {
     return;
   }
 
-  // ── Проверка контента в промптах ───────────────────────────────────────────
-  const incomingText = ctx.message.body.text;
-  if (incomingText && incomingText.trim().length > 0 && !incomingText.startsWith('/')) {
-    const forbidden = checkBannedContent(incomingText);
-    if (forbidden) {
-      logger.warn(
-        'moderation',
-        'Banned content blocked',
-        JSON.stringify({ userId, word: forbidden, text: incomingText.slice(0, 200) }),
-        userId
-      );
-      await ctx.reply(
-        '🚫 Ваш запрос заблокирован — он содержит запрещённый контент.\n\n' +
-        'Генерация материалов с насилием, сексуальным или детским контентом запрещена.\n' +
-        'При повторных нарушениях аккаунт будет заблокирован.'
-      );
-      return;
-    }
-  }
-
   // Тест: /probe_video → следующим сообщением отправить видео
   if (videoProbePendingUserIds.has(userId)) {
     const attachments = ctx.message.body.attachments || [];
@@ -867,22 +811,31 @@ bot.on('message_created', async (ctx, next) => {
       return;
     }
 
-    const field = getPriceField(target);
-    if (!field) {
+    if (target.startsWith('set:')) {
+      const [, ciS, miS, siS] = target.split(':');
+      const ci = parseInt(ciS, 10), mi = parseInt(miS, 10), si = parseInt(siS, 10);
+      const setting = getSetting(ci, mi, si);
+      if (!setting) {
+        db_helper.updateVideoSetting(userId, 'admin_price_edit', null);
+        await ctx.reply('❌ Настройка больше недоступна. Откройте «💰 Цены» заново.');
+        return;
+      }
+      const value = Number(text.replace(',', '.'));
+      if (!Number.isFinite(value) || value < 0) {
+        await ctx.reply('❌ Введите неотрицательное число (например: 15). Для отмены: /admin');
+        return;
+      }
+      setPrice(setting.key, value);
       db_helper.updateVideoSetting(userId, 'admin_price_edit', null);
-      await ctx.reply('❌ Параметр цены больше недоступен. Откройте «💰 Цены» заново.');
+      await ctx.reply(`✅ «${setting.label}» теперь стоит ${value} 🍌`, {
+        attachments: [getModelKeyboard(ci, mi)]
+      });
       return;
     }
-    const value = Number(text.replace(',', '.'));
-    if (!Number.isFinite(value) || value < 0) {
-      await ctx.reply('❌ Введите неотрицательное число (например: 15). Для отмены: /admin');
-      return;
-    }
-    setPrice(target, value);
+
+    // неизвестный формат состояния — сбрасываем
     db_helper.updateVideoSetting(userId, 'admin_price_edit', null);
-    await ctx.reply(`✅ «${field.label}» теперь стоит ${value} 🍌`, {
-      attachments: [getPriceGroupKeyboard(field.group)]
-    });
+    await ctx.reply('❌ Сессия редактирования сброшена. Откройте «💰 Цены» заново.');
     return;
   }
 
@@ -1653,8 +1606,6 @@ const getMainMenuText = (balance: number) => `
 
 🍌 Ваш баланс: ${balance} бананов
 
-⚠️ Неприемлемый контент (насилие, сексуальный или детский контент и т.п.) запрещён: такие запросы **не проходят** в генерацию. При выявлении нарушения ваш аккаунт будет **заблокирован без возврата средств**.
-
 📢 Наш [Канал](${CHANNEL_MAX_URL})
 
 Попробуй прямо сейчас! 👇
@@ -2359,7 +2310,8 @@ bot.action('admin_refresh_stats', (ctx) => {
   });
 });
 
-// ─── Админ: редактирование цен ───────────────────────────────────────────────
+// ─── Админ: редактор цен (Категория → Модель → Настройка → Изменить) ─────────
+// Уровень 1: категории
 bot.action('admin_prices', (ctx) => {
   if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
   db_helper.updateVideoSetting(maxCtxUserId(ctx), 'admin_price_edit', null);
@@ -2369,17 +2321,8 @@ bot.action('admin_prices', (ctx) => {
   });
 });
 
-bot.action(/^admin_prices_g_(\w+)$/, (ctx) => {
-  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
-  const group = ctx.callback?.payload?.replace('admin_prices_g_', '') as PriceGroup | undefined;
-  if (!group || !(group in PRICE_GROUP_LABEL)) return;
-  return ctx.editMessage({
-    text: getPriceGroupText(group),
-    attachments: [getPriceGroupKeyboard(group)]
-  });
-});
-
-bot.action('admin_prices_packs', (ctx) => {
+// Уровень 2 (пакеты пополнения)
+bot.action('apc_packs', (ctx) => {
   if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
   return ctx.editMessage({
     text: getPacksAdminText(),
@@ -2387,28 +2330,77 @@ bot.action('admin_prices_packs', (ctx) => {
   });
 });
 
-bot.action(/^apk_(.+)$/, (ctx) => {
+// Уровень 2: модели категории
+bot.action(/^apc_(\d+)$/, (ctx) => {
   if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
-  const key = ctx.callback?.payload?.replace('apk_', '') || '';
-  const field = getPriceField(key);
-  if (!field) return ctx.reply('❌ Неизвестный параметр цены.');
-  db_helper.updateVideoSetting(maxCtxUserId(ctx), 'admin_price_edit', key);
+  const ci = parseInt(ctx.callback?.payload?.replace('apc_', '') || '', 10);
+  if (!getCategory(ci)) return;
+  return ctx.editMessage({
+    text: getCategoryText(ci),
+    attachments: [getCategoryKeyboard(ci)]
+  });
+});
+
+// Уровень 3: настройки модели
+bot.action(/^apm_(\d+)_(\d+)$/, (ctx) => {
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
+  const [, ciS, miS] = ctx.callback?.payload?.match(/^apm_(\d+)_(\d+)$/) || [];
+  const ci = parseInt(ciS, 10);
+  const mi = parseInt(miS, 10);
+  if (!getModel(ci, mi)) return;
+  return ctx.editMessage({
+    text: getModelText(ci, mi),
+    attachments: [getModelKeyboard(ci, mi)]
+  });
+});
+
+// Уровень 4: инфо о настройке + кнопка «Изменить цену»
+bot.action(/^aps_(\d+)_(\d+)_(\d+)$/, (ctx) => {
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
+  const [, ciS, miS, siS] = ctx.callback?.payload?.match(/^aps_(\d+)_(\d+)_(\d+)$/) || [];
+  const ci = parseInt(ciS, 10), mi = parseInt(miS, 10), si = parseInt(siS, 10);
+  if (!getSetting(ci, mi, si)) return;
+  return ctx.editMessage({
+    text: getSettingText(ci, mi, si),
+    attachments: [getSettingKeyboard(ci, mi, si)]
+  });
+});
+
+// Запрос новой цены настройки
+bot.action(/^ape_(\d+)_(\d+)_(\d+)$/, (ctx) => {
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
+  const [, ciS, miS, siS] = ctx.callback?.payload?.match(/^ape_(\d+)_(\d+)_(\d+)$/) || [];
+  const ci = parseInt(ciS, 10), mi = parseInt(miS, 10), si = parseInt(siS, 10);
+  const s = getSetting(ci, mi, si);
+  if (!s) return ctx.reply('❌ Настройка не найдена.');
+  db_helper.updateVideoSetting(maxCtxUserId(ctx), 'admin_price_edit', `set:${ci}:${mi}:${si}`);
   return ctx.reply(
-    `✏️ Изменение цены: ${field.label}\n` +
-    `Текущее значение: ${getPrice(key)} 🍌\n\n` +
+    `✏️ ${s.label}\n` +
+    `Текущая цена: ${getPrice(s.key)} 🍌\n\n` +
     `Отправьте новое значение (число 🍌). Для отмены: /admin`
   );
 });
 
+// Инфо о пакете
 bot.action(/^apck_(\d+)$/, (ctx) => {
   if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
   const idx = parseInt(ctx.callback?.payload?.replace('apck_', '') || '', 10);
+  if (!getPacks()[idx]) return ctx.reply('❌ Пакет не найден.');
+  return ctx.editMessage({
+    text: getPackText(idx),
+    attachments: [getPackKeyboard(idx)]
+  });
+});
+
+// Запрос новых значений пакета
+bot.action(/^apcke_(\d+)$/, (ctx) => {
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
+  const idx = parseInt(ctx.callback?.payload?.replace('apcke_', '') || '', 10);
   const pack = getPacks()[idx];
   if (!pack) return ctx.reply('❌ Пакет не найден.');
   db_helper.updateVideoSetting(maxCtxUserId(ctx), 'admin_price_edit', `pack:${idx}`);
   return ctx.reply(
-    `✏️ Изменение пакета №${idx + 1}\n` +
-    `Текущее: ${pack.bananas} 🍌 — ${pack.rubles}₽\n\n` +
+    `✏️ Пакет №${idx + 1} (сейчас: ${pack.bananas} 🍌 — ${pack.rubles}₽)\n\n` +
     `Отправьте два числа через пробел: «<бананы> <рубли>», например: 50 400\n` +
     `Для отмены: /admin`
   );
@@ -2930,7 +2922,7 @@ bot.action('seed2_lastframe_add', async (ctx) => {
   return ctx.reply(
     '🔚 Загрузка последнего кадра для Seedance 2.0\n\n' +
     'Отправьте одно фото в чат — оно станет финальным кадром видео-перехода.\n\n' +
-    `+${getPrice('video.seedance2_lastframe')} 🍌 к стоимости. Чтобы отменить — нажмите «🗑 Убрать last frame» в меню видео.`
+    `+${getPrice('video.seedance_2.lastframe')} 🍌 к стоимости. Чтобы отменить — нажмите «🗑 Убрать last frame» в меню видео.`
   );
 });
 

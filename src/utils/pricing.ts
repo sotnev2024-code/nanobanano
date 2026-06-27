@@ -3,68 +3,179 @@ import { db_helper } from '../db';
 /**
  * Единый источник цен для бота.
  *
- * Цены хранятся в таблице `settings`:
- *   - 'pricing_overrides' — JSON { [priceKey]: number } с переопределениями (дефолты ниже);
- *   - 'packs'             — JSON [{ bananas, rubles }] с пакетами пополнения.
+ * Структура — дерево: Категория → Модель → Настройка (цена в 🍌).
+ * Это же дерево используется и для расчётов (через getPrice по ключу),
+ * и для редактора цен в админ-панели (навигация по категориям/моделям).
  *
- * Любой код (расчёты стоимости И подписи кнопок) читает цены только отсюда,
- * поэтому правки из админ-панели мгновенно отражаются и в цене, и в тексте.
+ * Хранилище (таблица `settings`):
+ *   - 'pricing_overrides' — JSON { [key]: number } с переопределениями;
+ *   - 'packs'             — JSON [{ bananas, rubles }] пакеты пополнения.
  */
 
-export type PriceGroup = 'video' | 'photo' | 'music' | 'motion' | 'avatar';
-
-export interface PriceField {
-  key: string;
-  label: string;
-  group: PriceGroup;
-  def: number;
+export interface PriceSetting {
+  key: string;     // уникальный ключ цены
+  label: string;   // подпись в редакторе
+  def: number;     // значение по умолчанию (🍌)
+  note?: string;   // пояснение на экране настройки
 }
 
-export const PRICE_GROUP_LABEL: Record<PriceGroup, string> = {
-  video: '🎬 Видео',
-  photo: '📸 Фото',
-  music: '🎵 Музыка',
-  motion: '🕺 Motion Control',
-  avatar: '🗣 AI Avatar / InfiniTalk'
-};
+export interface PriceModel {
+  id: string;
+  label: string;
+  settings: PriceSetting[];
+}
 
-/** Полный список редактируемых числовых цен (гранулярно). */
-export const PRICE_FIELDS: PriceField[] = [
-  // ── Видео ──────────────────────────────────────────────────────────────
-  { key: 'video.rate_per_sec',          label: 'Ставка 🍌/сек (Kling/Hailuo/Grok)', group: 'video', def: 3 },
-  { key: 'video.veo',                   label: 'Veo 3.1 (фикс. цена)',              group: 'video', def: 30 },
-  { key: 'video.seedance15.4',          label: 'Seedance 1.5 — 4 сек',              group: 'video', def: 14 },
-  { key: 'video.seedance15.8',          label: 'Seedance 1.5 — 8 сек',              group: 'video', def: 28 },
-  { key: 'video.seedance15.12',         label: 'Seedance 1.5 — 12 сек',             group: 'video', def: 42 },
-  { key: 'video.seedance2_extra',       label: 'Seedance 2.0 — надбавка к 1.5',     group: 'video', def: 3 },
-  { key: 'video.seedance2_1080p.4',     label: 'Seedance 2.0 1080p — +за 4 сек',    group: 'video', def: 10 },
-  { key: 'video.seedance2_1080p.8',     label: 'Seedance 2.0 1080p — +за 8 сек',    group: 'video', def: 20 },
-  { key: 'video.seedance2_1080p.12',    label: 'Seedance 2.0 1080p — +за 12 сек',   group: 'video', def: 30 },
-  { key: 'video.seedance2_480p_discount', label: 'Seedance 2.0 480p — скидка',      group: 'video', def: 5 },
-  { key: 'video.seedance2_lastframe',   label: 'Seedance 2.0 — last frame',         group: 'video', def: 5 },
-  // ── Фото (база модели) ─────────────────────────────────────────────────
-  { key: 'photo.seedream_5_lite',       label: 'Seedream 5.0 Lite',                 group: 'photo', def: 4 },
-  { key: 'photo.seedream_45_edit',      label: 'Seedream 4.5 Edit',                 group: 'photo', def: 4 },
-  { key: 'photo.nano_banana_pro',       label: 'Nano Banana Pro',                   group: 'photo', def: 5 },
-  { key: 'photo.nano_banana_2',         label: 'Nano Banana 2',                     group: 'photo', def: 7 },
-  { key: 'photo.gpt_image_2_t2i',       label: 'GPT Image 2',                       group: 'photo', def: 5 },
-  // ── Фото (надбавки за 4K и i2i) ────────────────────────────────────────
-  { key: 'photo.4k.nano_banana_pro',    label: '4K надбавка — Nano Banana Pro',     group: 'photo', def: 2 },
-  { key: 'photo.4k.nano_banana_2',      label: '4K надбавка — Nano Banana 2',       group: 'photo', def: 3 },
-  { key: 'photo.4k.gpt_image_2_t2i',    label: '4K надбавка — GPT Image 2',         group: 'photo', def: 5 },
-  { key: 'photo.gpt_i2i_extra',         label: 'GPT Image 2 — надбавка i2i',        group: 'photo', def: 1 },
-  // ── Музыка ─────────────────────────────────────────────────────────────
-  { key: 'music.simple',                label: 'Простой режим',                     group: 'music', def: 8 },
-  { key: 'music.custom',                label: 'Кастом-режим',                      group: 'music', def: 12 },
-  { key: 'music.instrumental',          label: 'Только инструментал',               group: 'music', def: 6 },
-  // ── Motion Control ─────────────────────────────────────────────────────
-  { key: 'motion.std',                  label: 'Standard (Kling 2.6)',              group: 'motion', def: 15 },
-  { key: 'motion.pro',                  label: 'Pro (Kling 3.0)',                   group: 'motion', def: 30 },
-  // ── AI Avatar / InfiniTalk ─────────────────────────────────────────────
-  { key: 'avatar.per_sec',              label: '🍌 за секунду аудио',               group: 'avatar', def: 10 }
+export interface PriceCategory {
+  id: string;
+  label: string;
+  models: PriceModel[];
+}
+
+export const PRICE_TREE: PriceCategory[] = [
+  {
+    id: 'video',
+    label: '🎬 Видео',
+    models: [
+      {
+        id: 'kling_3_std',
+        label: '⚡ Kling 3.0 std',
+        settings: [
+          { key: 'video.kling_3_std.5', label: '5 секунд', def: 15 },
+          { key: 'video.kling_3_std.10', label: '10 секунд', def: 30 },
+          { key: 'video.kling_3_std.15', label: '15 секунд', def: 45 }
+        ]
+      },
+      {
+        id: 'kling_3_pro',
+        label: '💎 Kling 3.0 pro',
+        settings: [
+          { key: 'video.kling_3_pro.5', label: '5 секунд', def: 15 },
+          { key: 'video.kling_3_pro.10', label: '10 секунд', def: 30 },
+          { key: 'video.kling_3_pro.15', label: '15 секунд', def: 45 }
+        ]
+      },
+      {
+        id: 'seedance_1.5_pro',
+        label: '🌱 Seedance 1.5 pro',
+        settings: [
+          { key: 'video.seedance_1.5.4', label: '4 секунды', def: 14 },
+          { key: 'video.seedance_1.5.8', label: '8 секунд', def: 28 },
+          { key: 'video.seedance_1.5.12', label: '12 секунд', def: 42 }
+        ]
+      },
+      {
+        id: 'seedance_2',
+        label: '🌿 Seedance 2.0',
+        settings: [
+          { key: 'video.seedance_2.4', label: '4 секунды (720p)', def: 17 },
+          { key: 'video.seedance_2.8', label: '8 секунд (720p)', def: 31 },
+          { key: 'video.seedance_2.12', label: '12 секунд (720p)', def: 45 },
+          { key: 'video.seedance_2.1080p.4', label: 'Надбавка 1080p (4 c)', def: 10 },
+          { key: 'video.seedance_2.1080p.8', label: 'Надбавка 1080p (8 c)', def: 20 },
+          { key: 'video.seedance_2.1080p.12', label: 'Надбавка 1080p (12 c)', def: 30 },
+          { key: 'video.seedance_2.480p_discount', label: 'Скидка за 480p', def: 5 },
+          { key: 'video.seedance_2.lastframe', label: 'Надбавка за last frame', def: 5 }
+        ]
+      },
+      {
+        id: 'hailuo_2.3',
+        label: '🌊 Хайлуо 2.3',
+        settings: [
+          { key: 'video.hailuo.6', label: '6 секунд', def: 18 },
+          { key: 'video.hailuo.10', label: '10 секунд', def: 30 }
+        ]
+      },
+      {
+        id: 'veo_3.1',
+        label: '👁️ Veo 3.1',
+        settings: [{ key: 'video.veo', label: 'Фикс. цена (любая длительность)', def: 30 }]
+      },
+      {
+        id: 'grok_img2video',
+        label: '🤖 Grok Img→Video',
+        settings: [
+          { key: 'video.grok.6', label: '6 секунд', def: 18 },
+          { key: 'video.grok.10', label: '10 секунд', def: 30 },
+          { key: 'video.grok.15', label: '15 секунд', def: 45 },
+          { key: 'video.grok.20', label: '20 секунд', def: 60 }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'photo',
+    label: '📸 Фото',
+    models: [
+      {
+        id: 'seedream_5_lite',
+        label: '🎨 Seedream 5.0 Lite',
+        settings: [{ key: 'photo.seedream_5_lite.base', label: 'Базовая цена', def: 4 }]
+      },
+      {
+        id: 'seedream_45_edit',
+        label: '🌟 Seedream 4.5 Edit',
+        settings: [{ key: 'photo.seedream_45_edit.base', label: 'Базовая цена', def: 4 }]
+      },
+      {
+        id: 'nano_banana_pro',
+        label: '💎 Nano Banana Pro',
+        settings: [
+          { key: 'photo.nano_banana_pro.base', label: 'Базовая цена', def: 5 },
+          { key: 'photo.nano_banana_pro.4k', label: 'Надбавка за 4K', def: 2 }
+        ]
+      },
+      {
+        id: 'nano_banana_2',
+        label: '⚡ Nano Banana 2',
+        settings: [
+          { key: 'photo.nano_banana_2.base', label: 'Базовая цена', def: 7 },
+          { key: 'photo.nano_banana_2.4k', label: 'Надбавка за 4K', def: 3 }
+        ]
+      },
+      {
+        id: 'gpt_image_2_t2i',
+        label: '🤖 GPT Image 2',
+        settings: [
+          { key: 'photo.gpt_image_2_t2i.base', label: 'Базовая цена', def: 5 },
+          { key: 'photo.gpt_image_2_t2i.4k', label: 'Надбавка за 4K', def: 5 },
+          { key: 'photo.gpt_image_2_t2i.i2i', label: 'Надбавка за референсы (i2i)', def: 1 }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'music',
+    label: '🎵 Музыка',
+    models: [
+      { id: 'simple', label: '🎤 Простой режим', settings: [{ key: 'music.simple', label: 'Цена', def: 8 }] },
+      { id: 'custom', label: '🎼 Кастом-режим', settings: [{ key: 'music.custom', label: 'Цена', def: 12 }] },
+      { id: 'instrumental', label: '🥁 Только инструментал', settings: [{ key: 'music.instrumental', label: 'Цена', def: 6 }] }
+    ]
+  },
+  {
+    id: 'motion',
+    label: '🕺 Motion Control',
+    models: [
+      { id: 'std', label: '⚡ Standard (Kling 2.6)', settings: [{ key: 'motion.std', label: 'Цена', def: 15 }] },
+      { id: 'pro', label: '💎 Pro (Kling 3.0)', settings: [{ key: 'motion.pro', label: 'Цена', def: 30 }] }
+    ]
+  },
+  {
+    id: 'avatar',
+    label: '🗣 AI Avatar / InfiniTalk',
+    models: [
+      {
+        id: 'avatar_pro',
+        label: '👤 AI Avatar Pro / InfiniTalk',
+        settings: [{ key: 'avatar.per_sec', label: 'Цена за секунду аудио', def: 10 }]
+      }
+    ]
+  }
 ];
 
-const DEFAULTS: Record<string, number> = Object.fromEntries(PRICE_FIELDS.map((f) => [f.key, f.def]));
+// Дефолты выводятся из дерева — единый источник правды.
+const DEFAULTS: Record<string, number> = {};
+for (const c of PRICE_TREE) for (const m of c.models) for (const s of m.settings) DEFAULTS[s.key] = s.def;
 
 let overridesCache: Record<string, number> | null = null;
 
@@ -88,6 +199,12 @@ export function getPrice(key: string): number {
   return DEFAULTS[key] ?? 0;
 }
 
+/** Цена по ключу, либо fallback если такого ключа нет в дереве (для нестандартных значений). */
+export function getPriceOr(key: string, fallback: number): number {
+  if (!(key in DEFAULTS)) return fallback;
+  return getPrice(key);
+}
+
 /** Установить цену (override). value < 0 запрещён. */
 export function setPrice(key: string, value: number): void {
   if (!(key in DEFAULTS)) throw new Error(`Unknown price key: ${key}`);
@@ -96,15 +213,20 @@ export function setPrice(key: string, value: number): void {
   overridesCache = null;
 }
 
-export function getPriceField(key: string): PriceField | undefined {
-  return PRICE_FIELDS.find((f) => f.key === key);
+// ─── Навигация по дереву (для редактора в админке) ──────────────────────────
+export function getCategory(ci: number): PriceCategory | undefined {
+  return PRICE_TREE[ci];
 }
 
-export function priceFieldsByGroup(group: PriceGroup): PriceField[] {
-  return PRICE_FIELDS.filter((f) => f.group === group);
+export function getModel(ci: number, mi: number): PriceModel | undefined {
+  return PRICE_TREE[ci]?.models[mi];
 }
 
-// ─── Пакеты пополнения ────────────────────────────────────────────────────
+export function getSetting(ci: number, mi: number, si: number): PriceSetting | undefined {
+  return PRICE_TREE[ci]?.models[mi]?.settings[si];
+}
+
+// ─── Пакеты пополнения ──────────────────────────────────────────────────────
 export interface Pack {
   bananas: number;
   rubles: number;
@@ -140,7 +262,6 @@ export function getPacks(): Pack[] {
   return packsCache;
 }
 
-/** Перезаписать весь список пакетов. */
 export function setPacks(packs: Pack[]): void {
   const clean = packs
     .filter((p) => Number.isFinite(p.bananas) && Number.isFinite(p.rubles) && p.bananas > 0 && p.rubles > 0)
@@ -149,7 +270,6 @@ export function setPacks(packs: Pack[]): void {
   packsCache = null;
 }
 
-/** Изменить один пакет по индексу (создаёт при необходимости). */
 export function setPack(index: number, bananas: number, rubles: number): void {
   const packs = getPacks().map((p) => ({ ...p }));
   if (index >= 0 && index < packs.length) {
@@ -160,7 +280,6 @@ export function setPack(index: number, bananas: number, rubles: number): void {
   setPacks(packs);
 }
 
-/** Подпись пакета для кнопки. */
 export function packLabel(p: Pack, index: number): string {
   const bananasEmoji = '🍌'.repeat(Math.min(5, index + 1));
   return `${bananasEmoji} ${p.bananas} 🍌 — ${p.rubles}₽`;

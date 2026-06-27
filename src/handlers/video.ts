@@ -1,6 +1,6 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import { User, db_helper } from '../db';
-import { getPrice } from '../utils/pricing';
+import { getPrice, getPriceOr } from '../utils/pricing';
 
 /** Доп. настройки видео (Seedance 2.0: аудио, разрешение). */
 export type Seedance2Resolution = '480p' | '720p' | '1080p';
@@ -52,13 +52,9 @@ export const modelMap: Record<string, string> = {
     'from_audio': 'infinitalk/from-audio'
   };
 
-// Все цены берутся из модуля pricing (редактируются из админ-панели).
-// По умолчанию 3 🍌/сек. Veo — фикс 30. Seedance 1.5 pro: 4/8/12 с → 14/28/42; 2.0 — +3 🍌 к каждой ступени (17/31/45).
-const seedance15Bananas = (sec: number): number | undefined =>
-  ({ 4: getPrice('video.seedance15.4'), 8: getPrice('video.seedance15.8'), 12: getPrice('video.seedance15.12') } as Record<number, number>)[sec];
-
-const seedance2_1080pExtra = (sec: number): number | undefined =>
-  ({ 4: getPrice('video.seedance2_1080p.4'), 8: getPrice('video.seedance2_1080p.8'), 12: getPrice('video.seedance2_1080p.12') } as Record<number, number>)[sec];
+// Все цены берутся из модуля pricing (редактируются из админ-панели):
+// у каждой модели — прямые цены по длительности (ключ video.<model>.<sec>).
+const FALLBACK_RATE_PER_SEC = 3;
 
 /**
  * Считает стоимость видео в бананах.
@@ -72,26 +68,27 @@ export const getVideoCost = (
   if (modelId.includes('veo')) return getPrice('video.veo');
   const m = durationStr.match(/(\d+)/);
   const sec = m ? parseInt(m[1], 10) : 5;
-  const ratePerSec = getPrice('video.rate_per_sec');
+  const fb = sec * FALLBACK_RATE_PER_SEC;
 
   if (modelId === 'seedance_2') {
-    const base = seedance15Bananas(sec);
-    const extra = getPrice('video.seedance2_extra');
-    let total = base !== undefined ? base + extra : sec * ratePerSec + extra;
+    let total = getPriceOr(`video.seedance_2.${sec}`, fb + 3);
     const resolution = opts?.resolution ?? '720p';
     if (resolution === '1080p') {
-      total += seedance2_1080pExtra(sec) ?? Math.round(sec * 2.5);
+      total += getPriceOr(`video.seedance_2.1080p.${sec}`, Math.round(sec * 2.5));
     } else if (resolution === '480p') {
-      total = Math.max(10, total - getPrice('video.seedance2_480p_discount'));
+      total = Math.max(10, total - getPrice('video.seedance_2.480p_discount'));
     }
-    if (opts?.lastFrame) total += getPrice('video.seedance2_lastframe');
+    if (opts?.lastFrame) total += getPrice('video.seedance_2.lastframe');
     return total;
   }
   if (modelId.includes('seedance')) {
-    return seedance15Bananas(sec) ?? sec * ratePerSec;
+    return getPriceOr(`video.seedance_1.5.${sec}`, fb);
   }
+  if (modelId.includes('hailuo')) return getPriceOr(`video.hailuo.${sec}`, fb);
+  if (modelId.includes('grok')) return getPriceOr(`video.grok.${sec}`, fb);
+  if (modelId === 'kling_3_pro') return getPriceOr(`video.kling_3_pro.${sec}`, fb);
 
-  return sec * ratePerSec;
+  return getPriceOr(`video.kling_3_std.${sec}`, fb);
 };
 
 /** Минимальная цена модели (для подписи в списке моделей). */
@@ -281,7 +278,7 @@ export const getVideoMenuKeyboard = (user: User) => {
         rows.push([
           hasLastFrame
             ? Keyboard.button.callback('🗑 Убрать last frame', 'seed2_lastframe_clear')
-            : Keyboard.button.callback(`🔚 Загрузить last frame (+${getPrice('video.seedance2_lastframe')}🍌)`, 'seed2_lastframe_add')
+            : Keyboard.button.callback(`🔚 Загрузить last frame (+${getPrice('video.seedance_2.lastframe')}🍌)`, 'seed2_lastframe_add')
         ]);
       }
     } else if (user.video_model.includes('kling_3')) {
