@@ -1,13 +1,11 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import { User, db_helper } from '../db';
+import { getPrice } from '../utils/pricing';
 
 export type MusicMode = 'simple' | 'custom' | 'instrumental';
 
-export const MUSIC_COST: Record<MusicMode, number> = {
-  simple: 8,
-  custom: 12,
-  instrumental: 6,
-};
+/** Текущая цена режима музыки (из pricing). */
+export const getMusicCost = (mode: MusicMode): number => getPrice(`music.${mode}`);
 
 export const MUSIC_MODE_LABEL: Record<MusicMode, string> = {
   simple: '🎤 Простой режим',
@@ -53,15 +51,15 @@ export const getMusicMenuText = (user: User): string => {
 
 Выбери режим генерации:
 
-🎤 Простой — ${MUSIC_COST.simple} 🍌
+🎤 Простой — ${getMusicCost('simple')} 🍌
    Просто опиши песню (например, «грустная песня про осень») —
    стиль и название бот выберет сам.
 
-🎼 Кастом — ${MUSIC_COST.custom} 🍌
+🎼 Кастом — ${getMusicCost('custom')} 🍌
    Пошаговый конструктор: промпт → стиль → название → пол вокала.
    Полный контроль над треком.
 
-🥁 Инструментал — ${MUSIC_COST.instrumental} 🍌
+🥁 Инструментал — ${getMusicCost('instrumental')} 🍌
    Только музыка, без вокала.
 
 ℹ️ В каждом запросе ты получаешь 2 готовых трека на выбор.
@@ -70,9 +68,9 @@ export const getMusicMenuText = (user: User): string => {
 
 export const getMusicMenuKeyboard = (): ReturnType<typeof Keyboard.inlineKeyboard> => {
   return Keyboard.inlineKeyboard([
-    [Keyboard.button.callback(`${MUSIC_MODE_LABEL.simple} • ${MUSIC_COST.simple}🍌`, 'music_simple')],
-    [Keyboard.button.callback(`${MUSIC_MODE_LABEL.custom} • ${MUSIC_COST.custom}🍌`, 'music_custom')],
-    [Keyboard.button.callback(`${MUSIC_MODE_LABEL.instrumental} • ${MUSIC_COST.instrumental}🍌`, 'music_instrumental')],
+    [Keyboard.button.callback(`${MUSIC_MODE_LABEL.simple} • ${getMusicCost('simple')}🍌`, 'music_simple')],
+    [Keyboard.button.callback(`${MUSIC_MODE_LABEL.custom} • ${getMusicCost('custom')}🍌`, 'music_custom')],
+    [Keyboard.button.callback(`${MUSIC_MODE_LABEL.instrumental} • ${getMusicCost('instrumental')}🍌`, 'music_instrumental')],
     [Keyboard.button.callback('🏠 Главное меню', 'main_menu')],
   ]);
 };

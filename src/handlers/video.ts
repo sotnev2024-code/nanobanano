@@ -1,5 +1,6 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import { User, db_helper } from '../db';
+import { getPrice } from '../utils/pricing';
 
 /** Доп. настройки видео (Seedance 2.0: аудио, разрешение). */
 export type Seedance2Resolution = '480p' | '720p' | '1080p';
@@ -51,14 +52,13 @@ export const modelMap: Record<string, string> = {
     'from_audio': 'infinitalk/from-audio'
   };
 
+// Все цены берутся из модуля pricing (редактируются из админ-панели).
 // По умолчанию 3 🍌/сек. Veo — фикс 30. Seedance 1.5 pro: 4/8/12 с → 14/28/42; 2.0 — +3 🍌 к каждой ступени (17/31/45).
-const SEEDANCE_15_BANANAS: Record<number, number> = { 4: 14, 8: 28, 12: 42 };
-const SEEDANCE_2_EXTRA = 3;
+const seedance15Bananas = (sec: number): number | undefined =>
+  ({ 4: getPrice('video.seedance15.4'), 8: getPrice('video.seedance15.8'), 12: getPrice('video.seedance15.12') } as Record<number, number>)[sec];
 
-/** Надбавка за 1080p (по длительности). 480p — скидка -5🍌 (минимум 10). */
-const SEEDANCE_2_1080P_EXTRA: Record<number, number> = { 4: 10, 8: 20, 12: 30 };
-const SEEDANCE_2_480P_DISCOUNT = 5;
-const SEEDANCE_2_LAST_FRAME_EXTRA = 5;
+const seedance2_1080pExtra = (sec: number): number | undefined =>
+  ({ 4: getPrice('video.seedance2_1080p.4'), 8: getPrice('video.seedance2_1080p.8'), 12: getPrice('video.seedance2_1080p.12') } as Record<number, number>)[sec];
 
 /**
  * Считает стоимость видео в бананах.
@@ -69,28 +69,44 @@ export const getVideoCost = (
   durationStr: string,
   opts?: { resolution?: Seedance2Resolution; lastFrame?: boolean }
 ): number => {
-  if (modelId.includes('veo')) return 30;
+  if (modelId.includes('veo')) return getPrice('video.veo');
   const m = durationStr.match(/(\d+)/);
   const sec = m ? parseInt(m[1], 10) : 5;
+  const ratePerSec = getPrice('video.rate_per_sec');
 
   if (modelId === 'seedance_2') {
-    const base = SEEDANCE_15_BANANAS[sec];
-    let total = base !== undefined ? base + SEEDANCE_2_EXTRA : sec * 3 + SEEDANCE_2_EXTRA;
+    const base = seedance15Bananas(sec);
+    const extra = getPrice('video.seedance2_extra');
+    let total = base !== undefined ? base + extra : sec * ratePerSec + extra;
     const resolution = opts?.resolution ?? '720p';
     if (resolution === '1080p') {
-      total += SEEDANCE_2_1080P_EXTRA[sec] ?? Math.round(sec * 2.5);
+      total += seedance2_1080pExtra(sec) ?? Math.round(sec * 2.5);
     } else if (resolution === '480p') {
-      total = Math.max(10, total - SEEDANCE_2_480P_DISCOUNT);
+      total = Math.max(10, total - getPrice('video.seedance2_480p_discount'));
     }
-    if (opts?.lastFrame) total += SEEDANCE_2_LAST_FRAME_EXTRA;
+    if (opts?.lastFrame) total += getPrice('video.seedance2_lastframe');
     return total;
   }
   if (modelId.includes('seedance')) {
-    return SEEDANCE_15_BANANAS[sec] ?? sec * 3;
+    return seedance15Bananas(sec) ?? sec * ratePerSec;
   }
 
-  return sec * 3;
+  return sec * ratePerSec;
 };
+
+/** Минимальная цена модели (для подписи в списке моделей). */
+const VIDEO_MODEL_MIN_DURATION: Record<string, string> = {
+  kling_3_std: '5 сек',
+  kling_3_pro: '5 сек',
+  'seedance_1.5_pro': '4 сек',
+  seedance_2: '4 сек',
+  'hailuo_2.3': '6 сек',
+  'veo_3.1': '6 сек',
+  grok_img2video: '6 сек'
+};
+
+export const getVideoModelMinCost = (modelId: string): number =>
+  getVideoCost(modelId, VIDEO_MODEL_MIN_DURATION[modelId] || '5 сек');
 
 export const getVideoMenuText = (user: User) => {
   const modeMap: Record<string, string> = {
@@ -167,19 +183,21 @@ export const getVideoMenuKeyboard = (user: User) => {
     ]);
   }
 
-  // Models list (min price shown)
+  // Models list (min price shown, computed from pricing)
   const models = [
-    { id: 'kling_3_std',      label: '⚡ Kling 3.0 std • от 15 🍌' },
-    { id: 'kling_3_pro',      label: '💎 Kling 3.0 pro • от 15 🍌' },
-    { id: 'seedance_1.5_pro', label: '🌱 Seedance 1.5 pro • от 14 🍌' },
-    { id: 'seedance_2',       label: '🌿 Seedance 2.0 • от 17 🍌' },
-    { id: 'hailuo_2.3',       label: '🌊 Хайлуо 2.3 • от 18 🍌' },
-    { id: 'veo_3.1',          label: '👁️ Veo 3.1 • 30 🍌' },
-    { id: 'grok_img2video',   label: '🤖 Grok Img→Video • от 18 🍌' }
+    { id: 'kling_3_std',      emoji: '⚡', name: 'Kling 3.0 std',  prefix: 'от' },
+    { id: 'kling_3_pro',      emoji: '💎', name: 'Kling 3.0 pro',  prefix: 'от' },
+    { id: 'seedance_1.5_pro', emoji: '🌱', name: 'Seedance 1.5 pro', prefix: 'от' },
+    { id: 'seedance_2',       emoji: '🌿', name: 'Seedance 2.0',   prefix: 'от' },
+    { id: 'hailuo_2.3',       emoji: '🌊', name: 'Хайлуо 2.3',     prefix: 'от' },
+    { id: 'veo_3.1',          emoji: '👁️', name: 'Veo 3.1',        prefix: '' },
+    { id: 'grok_img2video',   emoji: '🤖', name: 'Grok Img→Video', prefix: 'от' }
   ];
 
   models.forEach(m => {
-    rows.push([Keyboard.button.callback(`${check(user.video_model, m.id)}${m.label}`, `set_model_${m.id}`)]);
+    const priceTxt = `${m.prefix ? m.prefix + ' ' : ''}${getVideoModelMinCost(m.id)} 🍌`;
+    const label = `${m.emoji} ${m.name} • ${priceTxt}`;
+    rows.push([Keyboard.button.callback(`${check(user.video_model, m.id)}${label}`, `set_model_${m.id}`)]);
   });
 
   // Aspect Ratios (only if supported)
@@ -231,36 +249,19 @@ export const getVideoMenuKeyboard = (user: User) => {
     ]);
   }
 
-  // Durations with price (only if supported)
+  // Durations with price (computed from pricing)
+  const durBtn = (sec: string) =>
+    Keyboard.button.callback(
+      `${check(user.video_duration, sec)}${sec} • ${getVideoCost(user.video_model, sec)} 🍌`,
+      `set_duration_${sec}`
+    );
   if (caps.duration) {
     if (user.video_model.includes('grok')) {
-      rows.push([
-        Keyboard.button.callback(`${check(user.video_duration, '6 сек')}6 сек • 18 🍌`, 'set_duration_6 сек'),
-        Keyboard.button.callback(`${check(user.video_duration, '10 сек')}10 сек • 30 🍌`, 'set_duration_10 сек'),
-        Keyboard.button.callback(`${check(user.video_duration, '15 сек')}15 сек • 45 🍌`, 'set_duration_15 сек'),
-        Keyboard.button.callback(`${check(user.video_duration, '20 сек')}20 сек • 60 🍌`, 'set_duration_20 сек')
-      ]);
+      rows.push([durBtn('6 сек'), durBtn('10 сек'), durBtn('15 сек'), durBtn('20 сек')]);
     } else if (user.video_model.includes('hailuo')) {
-      rows.push([
-        Keyboard.button.callback(`${check(user.video_duration, '6 сек')}6 сек • 18 🍌`, 'set_duration_6 сек'),
-        Keyboard.button.callback(`${check(user.video_duration, '10 сек')}10 сек • 30 🍌`, 'set_duration_10 сек')
-      ]);
+      rows.push([durBtn('6 сек'), durBtn('10 сек')]);
     } else if (user.video_model.includes('seedance')) {
-      const s2 = user.video_model === 'seedance_2';
-      rows.push([
-        Keyboard.button.callback(
-          `${check(user.video_duration, '4 сек')}4 сек • ${s2 ? 17 : 14} 🍌`,
-          'set_duration_4 сек'
-        ),
-        Keyboard.button.callback(
-          `${check(user.video_duration, '8 сек')}8 сек • ${s2 ? 31 : 28} 🍌`,
-          'set_duration_8 сек'
-        ),
-        Keyboard.button.callback(
-          `${check(user.video_duration, '12 сек')}12 сек • ${s2 ? 45 : 42} 🍌`,
-          'set_duration_12 сек'
-        )
-      ]);
+      rows.push([durBtn('4 сек'), durBtn('8 сек'), durBtn('12 сек')]);
       if (user.video_model === 'seedance_2') {
         const v = parseVideoGenPrefs(user);
         const mk = (cond: boolean) => (cond ? '✅ ' : '');
@@ -280,15 +281,11 @@ export const getVideoMenuKeyboard = (user: User) => {
         rows.push([
           hasLastFrame
             ? Keyboard.button.callback('🗑 Убрать last frame', 'seed2_lastframe_clear')
-            : Keyboard.button.callback('🔚 Загрузить last frame (+5🍌)', 'seed2_lastframe_add')
+            : Keyboard.button.callback(`🔚 Загрузить last frame (+${getPrice('video.seedance2_lastframe')}🍌)`, 'seed2_lastframe_add')
         ]);
       }
     } else if (user.video_model.includes('kling_3')) {
-      rows.push([
-        Keyboard.button.callback(`${check(user.video_duration, '5 сек')}5 сек • 15 🍌`, 'set_duration_5 сек'),
-        Keyboard.button.callback(`${check(user.video_duration, '10 сек')}10 сек • 30 🍌`, 'set_duration_10 сек'),
-        Keyboard.button.callback(`${check(user.video_duration, '15 сек')}15 сек • 45 🍌`, 'set_duration_15 сек')
-      ]);
+      rows.push([durBtn('5 сек'), durBtn('10 сек'), durBtn('15 сек')]);
     }
   }
 

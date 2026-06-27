@@ -1,3 +1,4 @@
+import './utils/net-ipv4'; // ДОЛЖНО быть первым: форсирует IPv4 до любых соединений
 import 'dotenv/config';
 import bot from './bot';
 import { startTbankNotifyServer } from './tbank-notify-server';

@@ -1,6 +1,7 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import { User, db_helper } from '../db';
 import { uploadMediaUrlForKie } from '../utils/kie_api';
+import { getPrice } from '../utils/pricing';
 
 const NANO_OUTPUT_FORMAT_FIXED = 'jpg' as const;
 
@@ -26,9 +27,9 @@ export type PhotoKieModelId =
 /** 4K в UI: Seedream `high`, Nano `4K` в API Kie, GPT Image — `4K` (resolution-режим) */
 function photo4kExtraBananas(modelId: PhotoKieModelId): number {
   if (modelId === 'seedream_5_lite' || modelId === 'seedream_45_edit') return 0;
-  if (modelId === 'nano_banana_2') return 3;
-  if (modelId === 'gpt_image_2_t2i') return 5;
-  return 2;
+  if (modelId === 'nano_banana_2') return getPrice('photo.4k.nano_banana_2');
+  if (modelId === 'gpt_image_2_t2i') return getPrice('photo.4k.gpt_image_2_t2i');
+  return getPrice('photo.4k.nano_banana_pro');
 }
 
 export type PhotoOutputQuality = '2k' | '4k';
@@ -139,8 +140,9 @@ export function primePhotoConfigureStep(userId: string) {
   savePhotoGenPrefs(userId, defaultPhotoGenPrefs());
 }
 
+/** Базовая цена модели фото (из pricing, ключ photo.<id>). */
 export function getPhotoModelCost(id: PhotoKieModelId): number {
-  return PHOTO_MODEL_META[id].cost;
+  return getPrice(`photo.${id}`);
 }
 
 export function getPhotoOutputQuality(prefs: PhotoGenPrefs): PhotoOutputQuality {
@@ -157,11 +159,11 @@ export function getPhotoGenerationBananaCost(
   prefs: PhotoGenPrefs,
   opts?: { hasRefs?: boolean }
 ): number {
-  const base = PHOTO_MODEL_META[modelId].cost;
+  const base = getPrice(`photo.${modelId}`);
   let total =
     getPhotoOutputQuality(prefs) === '4k' ? base + photo4kExtraBananas(modelId) : base;
   if (modelId === 'gpt_image_2_t2i' && opts?.hasRefs) {
-    total += 1; // GPT Image 2: i2i на 1🍌 дороже t2i
+    total += getPrice('photo.gpt_i2i_extra'); // GPT Image 2: i2i дороже t2i
   }
   return total;
 }
@@ -180,7 +182,7 @@ function aspectKeyFromRatio(ratio: string): string {
 function modelButtonLabel(id: PhotoKieModelId, selected: PhotoKieModelId | null): string {
   const m = PHOTO_MODEL_META[id];
   const mark = selected === id ? '✅ ' : '';
-  return `${mark}${m.emoji} ${m.shortLabel} • от ${m.cost} 🍌`;
+  return `${mark}${m.emoji} ${m.shortLabel} • от ${getPrice(`photo.${id}`)} 🍌`;
 }
 
 function qualityButtonLabel(
@@ -237,7 +239,7 @@ export const getPhotoMenuText = (user: User) => {
     const noteGpt =
       mid === 'gpt_image_2_t2i'
         ? hasRefs
-          ? '\n\n📎 GPT Image 2: используется Image→Image (на основе ваших референсов, +1🍌 к стоимости)'
+          ? `\n\n📎 GPT Image 2: используется Image→Image (на основе ваших референсов, +${getPrice('photo.gpt_i2i_extra')}🍌 к стоимости)`
           : '\n\n📎 GPT Image 2: только текст. Чтобы использовать референсы — загрузите фото на шаге 1.'
         : '';
 

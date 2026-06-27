@@ -1,6 +1,6 @@
 import { logger } from './logger';
 
-const MAX_API_BASE = 'https://platform-api.max.ru';
+const MAX_API_BASE = (process.env.MAX_API_BASE || 'https://platform-api2.max.ru').trim();
 
 /** Все типы апдейтов, которые сейчас обрабатывает бот. */
 const DEFAULT_UPDATE_TYPES = [

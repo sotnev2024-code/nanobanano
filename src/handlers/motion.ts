@@ -1,5 +1,6 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import { User } from '../db';
+import { getPrice } from '../utils/pricing';
 
 export const getMotionControlText = (user: User) => {
   // AI Avatar Pro states
@@ -108,16 +109,16 @@ export const getMotionControlKeyboard = (user: User) => {
 
   return Keyboard.inlineKeyboard([
     [
-      Keyboard.button.callback('⚡ Standard • Kling 2.6 MC • 720p • 15 🍌', 'set_motion_std')
+      Keyboard.button.callback(`⚡ Standard • Kling 2.6 MC • 720p • ${getPrice('motion.std')} 🍌`, 'set_motion_std')
     ],
     [
-      Keyboard.button.callback('💎 Pro • Kling 3.0 MC • 720p • 30 🍌', 'set_motion_pro')
+      Keyboard.button.callback(`💎 Pro • Kling 3.0 MC • 720p • ${getPrice('motion.pro')} 🍌`, 'set_motion_pro')
     ],
     [
-      Keyboard.button.callback('👤 AI Avatar Pro • от 10 🍌/сек', 'set_avatar')
+      Keyboard.button.callback(`👤 AI Avatar Pro • от ${getPrice('avatar.per_sec')} 🍌/сек`, 'set_avatar')
     ],
     [
-      Keyboard.button.callback('🔊 InfiniTalk from-audio • от 10 🍌/сек', 'set_infinitalk')
+      Keyboard.button.callback(`🔊 InfiniTalk from-audio • от ${getPrice('avatar.per_sec')} 🍌/сек`, 'set_infinitalk')
     ],
     [
       Keyboard.button.callback('⬅️ Назад', 'main_menu')

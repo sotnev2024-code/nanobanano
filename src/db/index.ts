@@ -73,6 +73,13 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     level TEXT NOT NULL,
@@ -115,7 +122,8 @@ const columns = [
   { name: 'seedance_state', type: "TEXT DEFAULT 'idle'" },
   { name: 'seedance_last_frame_url', type: 'TEXT' },
   { name: 'music_state', type: "TEXT DEFAULT 'idle'" },
-  { name: 'music_draft_json', type: "TEXT DEFAULT '{}'" }
+  { name: 'music_draft_json', type: "TEXT DEFAULT '{}'" },
+  { name: 'admin_price_edit', type: 'TEXT' }
 ];
 
 const generationColumns = [
@@ -168,6 +176,7 @@ export interface User {
   seedance_last_frame_url: string | null;
   music_state: string; // 'idle' | 'awaiting_simple_prompt' | 'awaiting_custom_prompt' | 'awaiting_custom_style' | 'awaiting_custom_title' | 'awaiting_instrumental_prompt'
   music_draft_json: string; // JSON: { prompt?: string; style?: string; title?: string; vocalGender?: 'm'|'f' }
+  admin_price_edit: string | null; // какой ценовой ключ/пакет админ сейчас редактирует (null = не редактирует)
   created_at: string;
 }
 
@@ -203,7 +212,7 @@ export const db_helper = {
     stmt.run(balance, userId);
   },
 
-  updateVideoSetting: (userId: string, key: 'video_mode' | 'video_model' | 'video_ratio' | 'video_duration' | 'is_awaiting_prompt' | 'is_awaiting_media' | 'stored_image_url' | 'stored_video_url' | 'last_task_id' | 'is_admin_adding_bananas' | 'is_admin_broadcasting' | 'photo_references' | 'photo_state' | 'motion_state' | 'motion_quality' | 'photo_prompt_state' | 'grok_mode' | 'photo_prompt_upload_count' | 'photo_prompt_menu_message_id' | 'photo_menu_message_id' | 'photo_kie_model' | 'photo_gen_json' | 'video_gen_json' | 'seedance_state' | 'seedance_last_frame_url' | 'music_state' | 'music_draft_json', value: string | number | null): void => {
+  updateVideoSetting: (userId: string, key: 'video_mode' | 'video_model' | 'video_ratio' | 'video_duration' | 'is_awaiting_prompt' | 'is_awaiting_media' | 'stored_image_url' | 'stored_video_url' | 'last_task_id' | 'is_admin_adding_bananas' | 'is_admin_broadcasting' | 'photo_references' | 'photo_state' | 'motion_state' | 'motion_quality' | 'photo_prompt_state' | 'grok_mode' | 'photo_prompt_upload_count' | 'photo_prompt_menu_message_id' | 'photo_menu_message_id' | 'photo_kie_model' | 'photo_gen_json' | 'video_gen_json' | 'seedance_state' | 'seedance_last_frame_url' | 'music_state' | 'music_draft_json' | 'admin_price_edit', value: string | number | null): void => {
     const stmt = db.prepare(`UPDATE users SET ${key} = ? WHERE id = ?`);
     stmt.run(value, userId);
   },
@@ -335,6 +344,16 @@ export const db_helper = {
       ) p ON p.user_id = u.id
       ORDER BY u.created_at DESC
     `).all() as any[];
+  },
+
+  getSetting: (key: string): string | null => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  },
+
+  setSetting: (key: string, value: string): void => {
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run(key, value);
   },
 
   writeLog: (level: 'error' | 'warn' | 'info', type: string, message: string, details?: string, userId?: string): void => {

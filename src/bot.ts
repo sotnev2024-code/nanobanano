@@ -31,10 +31,19 @@ import {
   getPhotoPromptMenuText,
   getPhotoPromptMenuKeyboard
 } from './handlers/photo_prompt';
-import { getAdminPanelText, getAdminPanelKeyboard } from './handlers/admin';
+import {
+  getAdminPanelText,
+  getAdminPanelKeyboard,
+  getPricesMenuText,
+  getPricesMenuKeyboard,
+  getPriceGroupText,
+  getPriceGroupKeyboard,
+  getPacksAdminText,
+  getPacksAdminKeyboard
+} from './handlers/admin';
 import { getBillingMenuText, getBillingMenuKeyboard } from './handlers/billing';
 import {
-  MUSIC_COST,
+  getMusicCost,
   MUSIC_MODE_LABEL,
   getMusicMenuText,
   getMusicMenuKeyboard,
@@ -47,7 +56,19 @@ import {
 } from './handlers/music';
 import { kie_api, uploadMediaUrlForKie } from './utils/kie_api';
 import { suno_api, isSunoCompleted, isSunoFailed, isSunoFirstSuccess, type SunoTrack } from './utils/suno_api';
-import { tbank, PACKS } from './utils/tbank';
+import { tbank } from './utils/tbank';
+import {
+  PRICE_FIELDS,
+  PRICE_GROUP_LABEL,
+  getPrice,
+  setPrice,
+  getPriceField,
+  priceFieldsByGroup,
+  getPacks,
+  setPack,
+  packLabel,
+  type PriceGroup
+} from './utils/pricing';
 import { logger } from './utils/logger';
 import { probeIncomingVideoDuration, tryDurationFromMediaUrl } from './utils/video_duration';
 import { startScheduler } from './utils/scheduler';
@@ -144,6 +165,10 @@ if (!token) {
 const admins = (process.env.admins || '').split(',').map(id => id.trim());
 const isAdmin = (userId: string) => admins.includes(userId);
 
+// Базовый адрес MAX API. С 19.07 платформа переезжает на platform-api2.max.ru
+// (новый домен требует доверенный сертификат Минцифры на сервере, см. NODE_EXTRA_CA_CERTS).
+const MAX_API_BASE = (process.env.MAX_API_BASE || 'https://platform-api2.max.ru').trim();
+
 /** user_id в рантайме у Max есть; типы `ctx.user` в SDK неполные (strict TS даёт `never`). */
 function maxCtxUserId(ctx: { user?: unknown }): string {
   const u = ctx.user as { user_id?: number | string | bigint } | undefined;
@@ -151,7 +176,7 @@ function maxCtxUserId(ctx: { user?: unknown }): string {
   return String(u.user_id);
 }
 
-const bot = new Bot(token);
+const bot = new Bot(token, { clientOptions: { baseUrl: MAX_API_BASE } });
 
 bot.api.setMyCommands([
   { name: 'start', description: '🏠 Главное меню' },
@@ -509,7 +534,7 @@ async function runMusicGeneration(ctx: any, userId: string, mode: MusicMode) {
     return ctx.reply('❌ Не задан промпт. Начни заново — нажми «🎵 Музыка» в главном меню.');
   }
 
-  const cost = MUSIC_COST[mode];
+  const cost = getMusicCost(mode);
   if (!isAdmin(userId) && user.balance < cost) {
     return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${cost} 🍌).`);
   }
@@ -820,6 +845,47 @@ bot.on('message_created', async (ctx, next) => {
     return;
   }
 
+  // Handle admin editing prices (цена генерации или пакет пополнения)
+  if (isAdmin(userId) && user.admin_price_edit && ctx.message.body.text) {
+    const target = user.admin_price_edit;
+    const text = ctx.message.body.text.trim();
+
+    if (target.startsWith('pack:')) {
+      const idx = parseInt(target.slice(5), 10);
+      const parts = text.split(/\s+/);
+      const bananas = parseInt(parts[0], 10);
+      const rubles = parseInt(parts[1], 10);
+      if (parts.length < 2 || isNaN(bananas) || isNaN(rubles) || bananas <= 0 || rubles <= 0) {
+        await ctx.reply('❌ Нужно два положительных числа через пробел: «<бананы> <рубли>», например: 50 400');
+        return;
+      }
+      setPack(idx, bananas, rubles);
+      db_helper.updateVideoSetting(userId, 'admin_price_edit', null);
+      await ctx.reply(`✅ Пакет №${idx + 1} обновлён: ${bananas} 🍌 — ${rubles}₽`, {
+        attachments: [getPacksAdminKeyboard()]
+      });
+      return;
+    }
+
+    const field = getPriceField(target);
+    if (!field) {
+      db_helper.updateVideoSetting(userId, 'admin_price_edit', null);
+      await ctx.reply('❌ Параметр цены больше недоступен. Откройте «💰 Цены» заново.');
+      return;
+    }
+    const value = Number(text.replace(',', '.'));
+    if (!Number.isFinite(value) || value < 0) {
+      await ctx.reply('❌ Введите неотрицательное число (например: 15). Для отмены: /admin');
+      return;
+    }
+    setPrice(target, value);
+    db_helper.updateVideoSetting(userId, 'admin_price_edit', null);
+    await ctx.reply(`✅ «${field.label}» теперь стоит ${value} 🍌`, {
+      attachments: [getPriceGroupKeyboard(field.group)]
+    });
+    return;
+  }
+
   // ── Музыка (Suno V5_5): пошаговый ввод текста ────────────────────────
   if (user.music_state && user.music_state !== 'idle') {
     const text = (ctx.message.body.text || '').trim();
@@ -1111,7 +1177,7 @@ bot.on('message_created', async (ctx, next) => {
       for (const attachment of attachments) {
         if (attachment.type === 'video') {
           const videoUrl = (attachment as any).payload.url;
-          const cost = user.motion_quality === 'std' ? 15 : 30;
+          const cost = user.motion_quality === 'std' ? getPrice('motion.std') : getPrice('motion.pro');
           const internalModel = user.motion_quality === 'std' ? 'kling_2.6_motion' : 'kling_3_motion';
           const modelName =
             user.motion_quality === 'std'
@@ -1618,7 +1684,7 @@ const getMainMenuKeyboard = () => {
 // ─── Shared generation helpers for Avatar Pro & InfiniTalk ───────────────────
 
 const motionAudioBananaCost = (durationSec: number): number =>
-  Math.max(1, Math.ceil(durationSec)) * 10;
+  Math.max(1, Math.ceil(durationSec)) * getPrice('avatar.per_sec');
 
 const runAvatarProGeneration = async (ctx: any, userId: string, prompt: string) => {
   const user = db_helper.getUser(userId);
@@ -1638,7 +1704,7 @@ const runAvatarProGeneration = async (ctx: any, userId: string, prompt: string) 
   const cost = motionAudioBananaCost(durationSec);
   if (!isAdmin(userId) && user.balance < cost) {
     return ctx.reply(
-      `❌ Недостаточно бананов: нужно ${cost} 🍌 (≈ ${durationSec.toFixed(1)} с × 10 🍌/сек).`
+      `❌ Недостаточно бананов: нужно ${cost} 🍌 (≈ ${durationSec.toFixed(1)} с × ${getPrice('avatar.per_sec')} 🍌/сек).`
     );
   }
 
@@ -1689,7 +1755,7 @@ const runInfiniTalkGeneration = async (ctx: any, userId: string, prompt: string)
   const cost = motionAudioBananaCost(durationSec);
   if (!isAdmin(userId) && user.balance < cost) {
     return ctx.reply(
-      `❌ Недостаточно бананов: нужно ${cost} 🍌 (≈ ${durationSec.toFixed(1)} с × 10 🍌/сек).`
+      `❌ Недостаточно бананов: нужно ${cost} 🍌 (≈ ${durationSec.toFixed(1)} с × ${getPrice('avatar.per_sec')} 🍌/сек).`
     );
   }
 
@@ -1757,6 +1823,7 @@ bot.command('start', (ctx) => {
     db_helper.updateVideoSetting(userId, 'motion_state', 'idle');
     db_helper.updateVideoSetting(userId, 'is_admin_adding_bananas', 0);
     db_helper.updateVideoSetting(userId, 'is_admin_broadcasting', 0);
+    db_helper.updateVideoSetting(userId, 'admin_price_edit', null);
     user = db_helper.getUser(userId)!;
   }
 
@@ -2285,11 +2352,66 @@ bot.command(/^unban(\s+.*)?$/, async (ctx) => {
 
 bot.action('admin_refresh_stats', (ctx) => {
   if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
-  
+
   return ctx.editMessage({
     text: getAdminPanelText(),
     attachments: [getAdminPanelKeyboard()]
   });
+});
+
+// ─── Админ: редактирование цен ───────────────────────────────────────────────
+bot.action('admin_prices', (ctx) => {
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
+  db_helper.updateVideoSetting(maxCtxUserId(ctx), 'admin_price_edit', null);
+  return ctx.editMessage({
+    text: getPricesMenuText(),
+    attachments: [getPricesMenuKeyboard()]
+  });
+});
+
+bot.action(/^admin_prices_g_(\w+)$/, (ctx) => {
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
+  const group = ctx.callback?.payload?.replace('admin_prices_g_', '') as PriceGroup | undefined;
+  if (!group || !(group in PRICE_GROUP_LABEL)) return;
+  return ctx.editMessage({
+    text: getPriceGroupText(group),
+    attachments: [getPriceGroupKeyboard(group)]
+  });
+});
+
+bot.action('admin_prices_packs', (ctx) => {
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
+  return ctx.editMessage({
+    text: getPacksAdminText(),
+    attachments: [getPacksAdminKeyboard()]
+  });
+});
+
+bot.action(/^apk_(.+)$/, (ctx) => {
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
+  const key = ctx.callback?.payload?.replace('apk_', '') || '';
+  const field = getPriceField(key);
+  if (!field) return ctx.reply('❌ Неизвестный параметр цены.');
+  db_helper.updateVideoSetting(maxCtxUserId(ctx), 'admin_price_edit', key);
+  return ctx.reply(
+    `✏️ Изменение цены: ${field.label}\n` +
+    `Текущее значение: ${getPrice(key)} 🍌\n\n` +
+    `Отправьте новое значение (число 🍌). Для отмены: /admin`
+  );
+});
+
+bot.action(/^apck_(\d+)$/, (ctx) => {
+  if (!ctx.user || !isAdmin(maxCtxUserId(ctx))) return;
+  const idx = parseInt(ctx.callback?.payload?.replace('apck_', '') || '', 10);
+  const pack = getPacks()[idx];
+  if (!pack) return ctx.reply('❌ Пакет не найден.');
+  db_helper.updateVideoSetting(maxCtxUserId(ctx), 'admin_price_edit', `pack:${idx}`);
+  return ctx.reply(
+    `✏️ Изменение пакета №${idx + 1}\n` +
+    `Текущее: ${pack.bananas} 🍌 — ${pack.rubles}₽\n\n` +
+    `Отправьте два числа через пробел: «<бананы> <рубли>», например: 50 400\n` +
+    `Для отмены: /admin`
+  );
 });
 
 bot.action('admin_users_excel', async (ctx) => {
@@ -2586,8 +2708,8 @@ bot.action('music_simple', (ctx) => {
   const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user) return;
-  if (!isAdmin(userId) && user.balance < MUSIC_COST.simple) {
-    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${MUSIC_COST.simple} 🍌).`);
+  if (!isAdmin(userId) && user.balance < getMusicCost('simple')) {
+    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${getMusicCost('simple')} 🍌).`);
   }
   db_helper.updateVideoSetting(userId, 'music_state', 'awaiting_simple_prompt');
   saveMusicDraft(userId, {});
@@ -2595,7 +2717,7 @@ bot.action('music_simple', (ctx) => {
     '🎤 Простой режим\n\n' +
     'Опиши песню одним сообщением (до 500 символов).\n\n' +
     'Пример: «грустная песня про осень в стиле инди-рок, эмоциональный женский вокал»\n\n' +
-    `💰 Будет списано ${MUSIC_COST.simple} 🍌 после запуска.`
+    `💰 Будет списано ${getMusicCost('simple')} 🍌 после запуска.`
   );
 });
 
@@ -2604,8 +2726,8 @@ bot.action('music_instrumental', (ctx) => {
   const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user) return;
-  if (!isAdmin(userId) && user.balance < MUSIC_COST.instrumental) {
-    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${MUSIC_COST.instrumental} 🍌).`);
+  if (!isAdmin(userId) && user.balance < getMusicCost('instrumental')) {
+    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${getMusicCost('instrumental')} 🍌).`);
   }
   db_helper.updateVideoSetting(userId, 'music_state', 'awaiting_instrumental_prompt');
   saveMusicDraft(userId, {});
@@ -2613,7 +2735,7 @@ bot.action('music_instrumental', (ctx) => {
     '🥁 Только инструментал\n\n' +
     'Опиши музыку одним сообщением (до 500 символов).\n\n' +
     'Пример: «лофи-бит для учёбы, спокойный темп, фортепиано и мягкие ударные»\n\n' +
-    `💰 Будет списано ${MUSIC_COST.instrumental} 🍌 после запуска.`
+    `💰 Будет списано ${getMusicCost('instrumental')} 🍌 после запуска.`
   );
 });
 
@@ -2622,8 +2744,8 @@ bot.action('music_custom', (ctx) => {
   const userId = maxCtxUserId(ctx);
   const user = db_helper.getUser(userId);
   if (!user) return;
-  if (!isAdmin(userId) && user.balance < MUSIC_COST.custom) {
-    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${MUSIC_COST.custom} 🍌).`);
+  if (!isAdmin(userId) && user.balance < getMusicCost('custom')) {
+    return ctx.reply(`❌ Недостаточно бананов для генерации (нужно ${getMusicCost('custom')} 🍌).`);
   }
   db_helper.updateVideoSetting(userId, 'music_state', 'awaiting_custom_prompt');
   saveMusicDraft(userId, {});
@@ -2808,7 +2930,7 @@ bot.action('seed2_lastframe_add', async (ctx) => {
   return ctx.reply(
     '🔚 Загрузка последнего кадра для Seedance 2.0\n\n' +
     'Отправьте одно фото в чат — оно станет финальным кадром видео-перехода.\n\n' +
-    '+5 🍌 к стоимости. Чтобы отменить — нажмите «🗑 Убрать last frame» в меню видео.'
+    `+${getPrice('video.seedance2_lastframe')} 🍌 к стоимости. Чтобы отменить — нажмите «🗑 Убрать last frame» в меню видео.`
   );
 });
 
@@ -2932,12 +3054,13 @@ bot.action('top_up', (ctx) => {
     attachments: [getBillingMenuKeyboard()]
   });
 });
-bot.action(/^buy_pack_(\d+)$/, async (ctx) => {
+bot.action(/^buy_pack_idx_(\d+)$/, async (ctx) => {
   const p = ctx.callback?.payload;
   if (!ctx.user || !p) return;
   const userId = maxCtxUserId(ctx);
-  const bananas = parseInt(p.replace('buy_pack_', ''), 10);
-  const pack = PACKS.find(p => p.bananas === bananas);
+  const idx = parseInt(p.replace('buy_pack_idx_', ''), 10);
+  const packs = getPacks();
+  const pack = packs[idx];
   if (!pack) return ctx.reply('❌ Пакет не найден.');
 
   try {
@@ -2948,7 +3071,7 @@ bot.action(/^buy_pack_(\d+)$/, async (ctx) => {
 
     await ctx.reply(
       `💳 Счёт создан!\n\n` +
-      `📦 Пакет: ${pack.label}\n\n` +
+      `📦 Пакет: ${packLabel(pack, idx)}\n\n` +
       `Нажмите кнопку ниже для оплаты. После успешной оплаты бананы начислятся автоматически в течение минуты.`,
       {
         attachments: [
