@@ -8,7 +8,7 @@ export const getBillingMenuText = () =>
   `• Видео — от ${getPrice('video.seedance_1.5.4')} 🍌 (зависит от модели и длительности)\n` +
   `• Seedance 2.0 (4 с) — ${getPrice('video.seedance_2.4')} 🍌\n` +
   `• AI Avatar / InfiniTalk — ${getPrice('avatar.per_sec')} 🍌 за сек аудио\n` +
-  `• Фото — от ${getPrice('photo.seedream_5_lite.base')} 🍌`;
+  `• Фото — от ${getPrice('photo.seedream_5_lite.2k')} 🍌`;
 
 export const getBillingMenuKeyboard = () => {
   const rows = getPacks().map((p, i) => [

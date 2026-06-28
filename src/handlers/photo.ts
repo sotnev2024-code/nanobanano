@@ -1,7 +1,7 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import { User, db_helper } from '../db';
 import { uploadMediaUrlForKie } from '../utils/kie_api';
-import { getPrice, getPriceOr } from '../utils/pricing';
+import { getPrice } from '../utils/pricing';
 
 const NANO_OUTPUT_FORMAT_FIXED = 'jpg' as const;
 
@@ -23,12 +23,6 @@ export type PhotoKieModelId =
   | 'nano_banana_pro'
   | 'nano_banana_2'
   | 'gpt_image_2_t2i';
-
-/** 4K в UI: Seedream `high`, Nano `4K` в API Kie, GPT Image — `4K` (resolution-режим) */
-function photo4kExtraBananas(modelId: PhotoKieModelId): number {
-  if (modelId === 'seedream_5_lite' || modelId === 'seedream_45_edit') return 0;
-  return getPriceOr(`photo.${modelId}.4k`, 0);
-}
 
 export type PhotoOutputQuality = '2k' | '4k';
 
@@ -138,9 +132,9 @@ export function primePhotoConfigureStep(userId: string) {
   savePhotoGenPrefs(userId, defaultPhotoGenPrefs());
 }
 
-/** Базовая цена модели фото (из pricing, ключ photo.<id>.base). */
+/** Минимальная (2K) цена модели фото — для подписи «от N». */
 export function getPhotoModelCost(id: PhotoKieModelId): number {
-  return getPrice(`photo.${id}.base`);
+  return getPrice(`photo.${id}.2k`);
 }
 
 export function getPhotoOutputQuality(prefs: PhotoGenPrefs): PhotoOutputQuality {
@@ -148,18 +142,16 @@ export function getPhotoOutputQuality(prefs: PhotoGenPrefs): PhotoOutputQuality 
 }
 
 /**
- * Списание 🍌: база модели; 4K — без доплаты (Seedream), +2 (Nano Pro), +3 (Nano 2),
- * +5 (GPT Image 2 при non-square 4K). Для GPT Image 2 при наличии референсов — +1🍌
- * (i2i дороже t2i на стороне KIE).
+ * Списание 🍌: абсолютная цена за выбранное качество (2K/4K) по модели
+ * (ключ photo.<model>.<2k|4k>). Для GPT Image 2 при наличии референсов — +i2i.
  */
 export function getPhotoGenerationBananaCost(
   modelId: PhotoKieModelId,
   prefs: PhotoGenPrefs,
   opts?: { hasRefs?: boolean }
 ): number {
-  const base = getPrice(`photo.${modelId}.base`);
-  let total =
-    getPhotoOutputQuality(prefs) === '4k' ? base + photo4kExtraBananas(modelId) : base;
+  const quality = getPhotoOutputQuality(prefs); // '2k' | '4k'
+  let total = getPrice(`photo.${modelId}.${quality}`);
   if (modelId === 'gpt_image_2_t2i' && opts?.hasRefs) {
     total += getPrice('photo.gpt_image_2_t2i.i2i'); // GPT Image 2: i2i дороже t2i
   }
@@ -180,7 +172,7 @@ function aspectKeyFromRatio(ratio: string): string {
 function modelButtonLabel(id: PhotoKieModelId, selected: PhotoKieModelId | null): string {
   const m = PHOTO_MODEL_META[id];
   const mark = selected === id ? '✅ ' : '';
-  return `${mark}${m.emoji} ${m.shortLabel} • от ${getPrice(`photo.${id}.base`)} 🍌`;
+  return `${mark}${m.emoji} ${m.shortLabel} • от ${getPrice(`photo.${id}.2k`)} 🍌`;
 }
 
 function qualityButtonLabel(

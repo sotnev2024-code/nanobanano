@@ -109,36 +109,42 @@ export const PRICE_TREE: PriceCategory[] = [
       {
         id: 'seedream_5_lite',
         label: '🎨 Seedream 5.0 Lite',
-        settings: [{ key: 'photo.seedream_5_lite.base', label: 'Базовая цена', def: 4 }]
+        settings: [
+          { key: 'photo.seedream_5_lite.2k', label: '2K качество', def: 4 },
+          { key: 'photo.seedream_5_lite.4k', label: '4K качество', def: 4 }
+        ]
       },
       {
         id: 'seedream_45_edit',
         label: '🌟 Seedream 4.5 Edit',
-        settings: [{ key: 'photo.seedream_45_edit.base', label: 'Базовая цена', def: 4 }]
+        settings: [
+          { key: 'photo.seedream_45_edit.2k', label: '2K качество', def: 4 },
+          { key: 'photo.seedream_45_edit.4k', label: '4K качество', def: 4 }
+        ]
       },
       {
         id: 'nano_banana_pro',
         label: '💎 Nano Banana Pro',
         settings: [
-          { key: 'photo.nano_banana_pro.base', label: 'Базовая цена', def: 5 },
-          { key: 'photo.nano_banana_pro.4k', label: 'Надбавка за 4K', def: 2 }
+          { key: 'photo.nano_banana_pro.2k', label: '2K качество', def: 5 },
+          { key: 'photo.nano_banana_pro.4k', label: '4K качество', def: 7 }
         ]
       },
       {
         id: 'nano_banana_2',
         label: '⚡ Nano Banana 2',
         settings: [
-          { key: 'photo.nano_banana_2.base', label: 'Базовая цена', def: 7 },
-          { key: 'photo.nano_banana_2.4k', label: 'Надбавка за 4K', def: 3 }
+          { key: 'photo.nano_banana_2.2k', label: '2K качество', def: 7 },
+          { key: 'photo.nano_banana_2.4k', label: '4K качество', def: 10 }
         ]
       },
       {
         id: 'gpt_image_2_t2i',
         label: '🤖 GPT Image 2',
         settings: [
-          { key: 'photo.gpt_image_2_t2i.base', label: 'Базовая цена', def: 5 },
-          { key: 'photo.gpt_image_2_t2i.4k', label: 'Надбавка за 4K', def: 5 },
-          { key: 'photo.gpt_image_2_t2i.i2i', label: 'Надбавка за референсы (i2i)', def: 1 }
+          { key: 'photo.gpt_image_2_t2i.2k', label: '2K качество', def: 5 },
+          { key: 'photo.gpt_image_2_t2i.4k', label: '4K качество', def: 10 },
+          { key: 'photo.gpt_image_2_t2i.i2i', label: 'Надбавка за референсы (i2i)', def: 1, note: 'Добавляется к цене, когда фото генерируется по загруженным референсам.' }
         ]
       }
     ]
