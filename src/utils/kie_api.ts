@@ -1,4 +1,5 @@
 import axios from 'axios';
+import FormData from 'form-data';
 import dotenv from 'dotenv';
 import { logger } from './logger';
 
@@ -126,28 +127,45 @@ export async function uploadMediaUrlForKie(
     timeout: 120000
   });
   const buffer = Buffer.from(dl.data);
-  const blob = new Blob([buffer]);
-  const form = new FormData();
-  form.append('file', blob, fileName);
-  form.append('uploadPath', 'bot-max');
-  form.append('fileName', fileName);
 
-  const res = await fetch(`${KIE_FILE_BASE}/api/file-stream-upload`, {
-    method: 'POST',
-    headers: auth,
-    body: form
-  });
-  const json = (await res.json()) as KieUploadResponse;
-  const out = pickKieUploadedUrl(json?.data);
-  const ok =
-    res.ok &&
-    (json.success === true || json.code === 200) &&
-    !!out;
-  if (!ok) {
-    logger.error('kie_upload', 'Stream upload failed', { status: res.status, json });
-    throw new Error(json?.msg || `Kie file upload failed (${res.status})`);
+  // Через axios (не undici fetch): у kieai.redpandaai.co dual-stack DNS, а undici
+  // периодически спотыкается о нерабочий IPv6 → «fetch failed». axios с форсом IPv4
+  // (см. utils/net-ipv4) стабилен. Один ретрай на транзиентные сбои сети.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const form = new FormData();
+    form.append('file', buffer, { filename: fileName });
+    form.append('uploadPath', 'bot-max');
+    form.append('fileName', fileName);
+    try {
+      const res = await axios.post<KieUploadResponse>(
+        `${KIE_FILE_BASE}/api/file-stream-upload`,
+        form,
+        {
+          headers: { ...auth, ...form.getHeaders() },
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+          timeout: 120000,
+          validateStatus: () => true
+        }
+      );
+      const json = res.data;
+      const out = pickKieUploadedUrl(json?.data);
+      const ok = res.status >= 200 && res.status < 300 && (json?.success === true || json?.code === 200) && !!out;
+      if (!ok) {
+        logger.error('kie_upload', 'Stream upload failed', { status: res.status, json });
+        throw new Error(json?.msg || `Kie file upload failed (${res.status})`);
+      }
+      return out;
+    } catch (err) {
+      lastErr = err;
+      logger.warn('kie_upload', `Stream upload attempt ${attempt + 1}/2 failed`, {
+        message: err instanceof Error ? err.message : String(err)
+      });
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 2000));
+    }
   }
-  return out;
+  throw lastErr instanceof Error ? lastErr : new Error('Kie file upload failed');
 }
 
 export const kie_api = {
