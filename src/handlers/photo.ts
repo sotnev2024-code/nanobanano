@@ -351,7 +351,7 @@ export async function buildPhotoCreateTaskParams(
           image_urls: kieUrls,
           aspect_ratio: aspect,
           quality: seedreamQuality,
-          nsfw_checker: true
+          nsfw_checker: false
         }
       };
     }
@@ -361,7 +361,7 @@ export async function buildPhotoCreateTaskParams(
         prompt,
         aspect_ratio: aspect,
         quality: seedreamQuality,
-        nsfw_checker: true
+        nsfw_checker: false
       }
     };
   }
@@ -378,7 +378,7 @@ export async function buildPhotoCreateTaskParams(
         image_urls: kieUrls,
         aspect_ratio: aspect,
         quality: seedreamQuality,
-        nsfw_checker: true
+        nsfw_checker: false
       }
     };
   }
